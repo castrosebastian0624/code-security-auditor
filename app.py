@@ -549,45 +549,78 @@ if iniciar:
     elif not archivo_subido:
         st.error("⚠️ Por favor carga un archivo de código para auditar.")
     else:
-        try:
-            codigo_bytes = archivo_subido.read()
-            codigo_texto = codigo_bytes.decode("utf-8", errors="ignore")
+        codigo_bytes = archivo_subido.read()
+        codigo_texto = codigo_bytes.decode("utf-8", errors="ignore")
 
-            # Límite de seguridad básico para no reventar el contexto/costos en el MVP
-            LIMITE_CARACTERES = 60_000
-            if len(codigo_texto) > LIMITE_CARACTERES:
-                st.warning(
-                    f"El archivo supera los {LIMITE_CARACTERES} caracteres. "
-                    "Se analizarán solo los primeros para controlar costos en este MVP."
-                )
-                codigo_texto = codigo_texto[:LIMITE_CARACTERES]
+        archivo_valido = True
 
-            with st.spinner("🧠 Analizando tu código en busca de vulnerabilidades..."):
-                resultado = llamar_auditor(
-                    api_key=OPENROUTER_API_KEY,
-                    modelo=modelo_seleccionado,
-                    codigo=codigo_texto,
-                    nombre_archivo=archivo_subido.name,
-                )
-                st.session_state.resultado_auditoria = resultado
-                st.session_state.hora_auditoria = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-                # Solo se descuenta un uso si la auditoría se completó con éxito
-                # (si hubo error de conexión o JSON inválido, no se le cobra el
-                # intento al prospecto).
-                try:
-                    incrementar_uso(codigo_ingresado.strip())
-                except Exception as e:
-                    st.warning(f"No se pudo registrar el uso del código: {e}")
-
-        except json.JSONDecodeError:
+        # --- Validación 1: archivo vacío -------------------------------
+        # Si no hay texto legible, no tiene sentido llamar a la IA (y no
+        # queremos gastarle un uso gratuito al prospecto en un archivo
+        # que no tiene nada que auditar).
+        if not codigo_texto.strip():
             st.error(
-                "❌ El modelo no devolvió un JSON válido. Esto puede pasar ocasionalmente con "
-                "LLMs. Intenta de nuevo — normalmente se resuelve en el segundo intento."
+                "⚠️ El archivo está vacío o no contiene texto legible. "
+                "Sube un archivo de código con contenido real."
             )
-        except Exception as e:
-            # Errores típicos: 401 (API key inválida), 402 (sin créditos), 404 (modelo no existe)
-            st.error(f"❌ Ocurrió un error al procesar la auditoría: {e}")
+            archivo_valido = False
+
+        # --- Validación 2: contenido probablemente binario/no-código ---
+        # Un archivo binario (ej. una imagen renombrada a .py) decodificado
+        # con errors="ignore" produce texto con muy pocos caracteres
+        # imprimibles reales. Si la proporción es muy baja, es casi
+        # seguro que no es código fuente legible.
+        elif len(codigo_texto) > 0:
+            caracteres_imprimibles = sum(
+                1 for c in codigo_texto if c.isprintable() or c in "\n\r\t"
+            )
+            proporcion_legible = caracteres_imprimibles / len(codigo_texto)
+            if proporcion_legible < 0.85:
+                st.error(
+                    "⚠️ Este archivo no parece contener código fuente legible "
+                    "(podría ser un archivo binario con la extensión cambiada, "
+                    "como una imagen renombrada a .py). Sube un archivo de "
+                    "código de texto plano real."
+                )
+                archivo_valido = False
+
+        if archivo_valido:
+            try:
+                # Límite de seguridad básico para no reventar el contexto/costos en el MVP
+                LIMITE_CARACTERES = 60_000
+                if len(codigo_texto) > LIMITE_CARACTERES:
+                    st.warning(
+                        f"El archivo supera los {LIMITE_CARACTERES} caracteres. "
+                        "Se analizarán solo los primeros para controlar costos en este MVP."
+                    )
+                    codigo_texto = codigo_texto[:LIMITE_CARACTERES]
+
+                with st.spinner("🧠 Analizando tu código en busca de vulnerabilidades..."):
+                    resultado = llamar_auditor(
+                        api_key=OPENROUTER_API_KEY,
+                        modelo=modelo_seleccionado,
+                        codigo=codigo_texto,
+                        nombre_archivo=archivo_subido.name,
+                    )
+                    st.session_state.resultado_auditoria = resultado
+                    st.session_state.hora_auditoria = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+                    # Solo se descuenta un uso si la auditoría se completó con éxito
+                    # (si hubo error de conexión o JSON inválido, no se le cobra el
+                    # intento al prospecto).
+                    try:
+                        incrementar_uso(codigo_ingresado.strip())
+                    except Exception as e:
+                        st.warning(f"No se pudo registrar el uso del código: {e}")
+
+            except json.JSONDecodeError:
+                st.error(
+                    "❌ El modelo no devolvió un JSON válido. Esto puede pasar ocasionalmente con "
+                    "LLMs. Intenta de nuevo — normalmente se resuelve en el segundo intento."
+                )
+            except Exception as e:
+                # Errores típicos: 401 (API key inválida), 402 (sin créditos), 404 (modelo no existe)
+                st.error(f"❌ Ocurrió un error al procesar la auditoría: {e}")
 
 
 # ==============================================================================
