@@ -349,6 +349,7 @@ with st.sidebar:
         placeholder="Ej: DEMO-JUAN2026",
         help="Te lo proporcionó Sebastian directamente. Si no tienes uno, contáctalo.",
     )
+    st.caption("🔒 Tu código no se almacena ni se comparte — solo se usa para generar este análisis.")
 
     info_codigo = None
     codigo_valido = False
@@ -371,6 +372,11 @@ with st.sidebar:
                 st.warning(
                     "⚠️ Ya usaste todas tus auditorías gratuitas con este código. "
                     "Contacta a Sebastian para continuar."
+                )
+                st.link_button(
+                    "💬 Escribir por WhatsApp",
+                    "https://wa.me/573145421351?text=Hola%20Sebastian%2C%20ya%20us%C3%A9%20mis%20auditor%C3%ADas%20gratuitas%20y%20quiero%20continuar",
+                    use_container_width=True,
                 )
 
     # El modelo de IA usado es una decisión interna del negocio, no algo que
