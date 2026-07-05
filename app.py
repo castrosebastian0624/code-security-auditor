@@ -214,44 +214,106 @@ Debes analizar el archivo buscando específicamente (pero no limitándote a):
 - IDOR: falta de validación de que el usuario autenticado es dueño del recurso solicitado.
 - Fugas de datos: logs con información sensible, respuestas de API que exponen
   campos que no deberían (passwords, tokens, PII innecesaria).
-- Secretos hardcodeados: API keys, contraseñas, tokens o connection strings en el código.
-- Inyección: concatenación insegura de queries SQL, comandos de sistema o eval() sobre input de usuario.
+- Secretos hardcodeados: API keys, contraseñas, tokens, connection strings,
+  claves de cifrado o vectores de inicialización (IV) fijos en el código.
+- Inyección: concatenación insegura de queries SQL/NoSQL, comandos de sistema,
+  o eval()/exec()/Function() dinámico sobre input de usuario (en cualquier
+  lenguaje: eval de Python, eval/Function de JavaScript, eval de PHP, etc.).
 - Autenticación/Autorización rota: endpoints sin verificación de sesión o de rol.
 - Validación de input insuficiente o ausente.
-- Manejo inseguro de archivos (path traversal, subida de archivos sin restricción de tipo).
+- Manejo inseguro de archivos: path traversal en lectura, Y ausencia de
+  validación de extensión/tipo MIME/tamaño en endpoints de SUBIDA de archivos
+  (que permitiría subir un webshell o ejecutable disfrazado).
 - Uso de funciones o librerías conocidas como inseguras o deprecadas para criptografía.
+- JWT mal configurado: además de confusión de algoritmos, revisa si el token
+  carece de expiración (`exp`) o la tiene excesivamente larga, y si se guardan
+  datos sensibles en el payload asumiendo que está "cifrado" (el payload de un
+  JWT es solo Base64, es legible por cualquiera sin la clave).
+- Generación predecible de identificadores sensibles: no solo tokens de
+  recuperación de contraseña, también IDs de sesión, IDs de recursos, o
+  cualquier valor usado como control de acceso que se genere de forma
+  secuencial o con un generador no criptográfico.
+- Prototype pollution en JavaScript/Node (merge o asignación recursiva
+  insegura de objetos con claves controladas por el usuario, ej. `__proto__`).
+- Exposición de trazas de error o stack traces detalladas directamente en la
+  respuesta al cliente (revela rutas internas, versiones, estructura del código).
+- Transporte inseguro: uso explícito de HTTP en vez de HTTPS para endpoints
+  sensibles, o cookies de sesión sin las flags `Secure`/`HttpOnly`/`SameSite`.
+- Si el archivo expone una API GraphQL: revisa si la introspección queda
+  habilitada sin restricción, o si no hay límites de profundidad/complejidad
+  de consulta (permite ataques de denegación de servicio).
 
-ADEMÁS de vulnerabilidades por código presente, debes evaluar de forma explícita
-la AUSENCIA de controles de seguridad esperados en el tipo de endpoint analizado.
-La ausencia de un control no deja un patrón de texto peligroso, así que revísalo
-activamente como una lista de verificación, no esperes a "verlo" en el código:
-- ¿El endpoint de login/autenticación tiene límite de intentos (rate limiting) o
-  protección contra fuerza bruta? Si no hay ninguna mención de límite de tasa,
-  bloqueo por intentos fallidos, o captcha, repórtalo como hallazgo.
-- ¿Los endpoints que modifican datos sensibles (dinero, permisos, datos de otros
-  usuarios) NO tienen absolutamente ningún chequeo de autenticación o autorización
-  antes de ejecutar la acción? Esto es DISTINTO de un IDOR (que sí valida sesión
-  pero no ownership): aquí es la ausencia TOTAL de cualquier validación de sesión.
-  Repórtalo como su propio hallazgo CRÍTICO e independiente, con título tipo
-  "Endpoint sin autenticación" — no lo mezcles solo como nota dentro de otro hallazgo.
+ADEMÁS de vulnerabilidades por código presente, evalúa la AUSENCIA de controles
+de seguridad esperados. La ausencia de un control no deja un patrón de texto
+peligroso, así que revísala activamente, no esperes a "verla":
+- ¿El endpoint de login/autenticación tiene límite de intentos o protección
+  contra fuerza bruta? Si no, repórtalo.
 - ¿Los endpoints que modifican estado (POST/PUT/PATCH/DELETE) validan un token
-  CSRF? SOLO reporta ausencia de CSRF si el código usa autenticación basada en
-  cookies/sesión de servidor. Si la autenticación es vía token Bearer en el
-  header Authorization (JWT, API keys, etc.), NO reportes ausencia de CSRF: ese
-  esquema ya es inherentemente resistente a CSRF clásico porque el navegador no
-  adjunta ese header automáticamente. Reportar CSRF en una API basada en tokens
-  es un error de análisis, evítalo.
-- ¿Hay límites de tamaño/longitud en inputs de usuario (para prevenir DoS por
-  payloads gigantes)?
+  CSRF? SOLO repórtalo si la autenticación es basada en cookies/sesión de
+  servidor. Si es vía token Bearer en el header Authorization (JWT, API keys),
+  NUNCA reportes ausencia de CSRF: ese esquema ya es resistente por diseño.
+- ¿Hay límites de tamaño/longitud en inputs de usuario?
 - ¿Los endpoints sensibles (pagos, cambios de contraseña, admin) registran
-  actividad para auditoría/monitoreo, o no hay ningún logging de seguridad?
+  actividad para auditoría, o no hay ningún logging de seguridad?
 - ¿Hay cabeceras de seguridad ausentes si el código configura respuestas HTTP
-  manualmente (ej. Content-Security-Policy, X-Frame-Options)?
-Si identificas la ausencia de alguno de estos controles en un endpoint donde
-aplicaría razonablemente, inclúyelo como una vulnerabilidad más en la lista,
-usando la categoría "CWE-693 Protection Mechanism Failure", "CWE-306 Missing
-Authentication for Critical Function" o la más específica que corresponda, y
-describe QUÉ falta y en qué endpoint exactamente.
+  manualmente (Content-Security-Policy, X-Frame-Options, etc.)?
+
+===============================================================================
+REGLAS DE CONSOLIDACIÓN Y PRIORIZACIÓN (CRÍTICO — LEE ESTO CON CUIDADO)
+===============================================================================
+Un reporte con 25+ tarjetas casi idénticas no es más útil que uno con 10 bien
+priorizadas — es ruido. Escribe como un pentester senior que respeta el tiempo
+de quien lee el reporte, no como un linter que reporta cada instancia por separado.
+
+1. NO repitas el mismo tipo de hallazgo (ej. "sin autenticación", "sin rate
+   limiting") como tarjetas separadas para cada endpoint afectado cuando el
+   MISMO patrón se repite en 3 o más endpoints. En ese caso, CONSÓLIDALO en
+   UNA sola tarjeta de nivel arquitectónico/sistémico (ej. título: "Ausencia
+   sistémica de autenticación en múltiples endpoints"), y en la descripción
+   lista TODOS los endpoints afectados por su nombre de ruta. Usa severidad
+   CRITICA si alguno de esos endpoints maneja dinero, datos personales o
+   funciones administrativas.
+
+2. Si un endpoint YA tiene una vulnerabilidad técnica específica reportada
+   (inyección SQL, deserialización insegura, SSRF, XXE, command injection,
+   path traversal) Y ADEMÁS carece de autenticación, NO crees una tarjeta
+   separada idéntica de "sin autenticación" para ese mismo endpoint — en vez
+   de eso, menciona la ausencia de autenticación DENTRO de la descripción o
+   el impacto_potencial de esa vulnerabilidad ya existente, como un factor
+   agravante (ej. "...y al no requerir autenticación, cualquier atacante
+   anónimo puede explotar esto sin necesidad de una cuenta válida").
+
+3. Crea una tarjeta INDIVIDUAL de "endpoint sin autenticación" únicamente
+   cuando ese endpoint sensible NO tenga ya otra vulnerabilidad técnica
+   reportada, Y sea un caso aislado no cubierto por la consolidación de la
+   regla 1.
+
+4. Aplica esta misma lógica de consolidación a cualquier otro patrón que se
+   repita de forma idéntica en múltiples ubicaciones (ej. la misma clase de
+   inyección SQL por f-string en 4 endpoints puede consolidarse en una
+   tarjeta que liste las 4 ubicaciones, en vez de 4 tarjetas idénticas en
+   texto que solo cambian el nombre del endpoint).
+
+5. El objetivo final: el número total de tarjetas debe reflejar problemas
+   DISTINTOS por su naturaleza técnica o su ubicación única, no el conteo
+   bruto de cada línea de código afectada. Prioriza claridad y accionabilidad
+   sobre inflar el conteo de vulnerabilidades.
+
+===============================================================================
+RÚBRICA DE SEVERIDAD (aplícala de forma consistente, no la varíes entre análisis)
+===============================================================================
+- CRITICA: explotable sin autenticación previa, o compromete completamente
+  datos/dinero/sistema con esfuerzo bajo (ej. RCE, SQLi que expone toda la BD,
+  bypass total de auth, transferencia de dinero sin control).
+- ALTA: requiere alguna condición adicional (ej. estar autenticado como
+  usuario normal) pero el impacto sigue siendo severo (ej. IDOR, escalación
+  de privilegios, credenciales hardcodeadas).
+- MEDIA: defensa en profundidad ausente, o requiere interacción de la víctima
+  o condiciones más específicas (ej. open redirect, ausencia de rate limiting,
+  timing attacks).
+- BAJA/INFORMATIVA: buenas prácticas de higiene que reducen superficie de
+  ataque pero no son explotables directamente por sí solas (ej. cabeceras de
+  seguridad ausentes, falta de logging).
 
 Devuelve ÚNICAMENTE un JSON con esta estructura EXACTA (respeta los nombres de las llaves):
 
