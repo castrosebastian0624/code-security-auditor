@@ -495,7 +495,20 @@ with st.sidebar:
     )
 
     st.divider()
-    iniciar = st.button("🔍 Iniciar Auditoría de Seguridad", type="primary", use_container_width=True)
+
+    terminos_aceptados = st.checkbox(
+        "Entiendo que este es un análisis automatizado que identifica "
+        "patrones de riesgo conocidos (OWASP Top 10, CWE) mediante "
+        "inteligencia artificial. No sustituye una auditoría de seguridad "
+        "manual completa ni garantiza la ausencia total de vulnerabilidades.",
+    )
+
+    iniciar = st.button(
+        "🔍 Iniciar Auditoría de Seguridad",
+        type="primary",
+        use_container_width=True,
+        disabled=not terminos_aceptados,
+    )
 
 
 # ==============================================================================
