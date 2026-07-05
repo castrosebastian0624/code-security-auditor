@@ -45,10 +45,11 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 
-@st.cache_resource
 def get_connection():
-    """Reutiliza la misma conexión mientras la app esté viva, en vez de abrir
-    una nueva por cada interacción del usuario."""
+    """Abre una conexión nueva cada vez, en vez de reutilizar una guardada.
+    Esto es necesario porque el plan gratuito de Neon suspende la base de
+    datos tras inactividad ('scale to zero'), lo que dejaría muerta cualquier
+    conexión cacheada de una sesión anterior."""
     return psycopg2.connect(DATABASE_URL)
 
 
@@ -56,13 +57,16 @@ def validar_codigo(codigo: str):
     """Busca el código en la base de datos. Devuelve un dict con la info del
     prospecto y sus usos, o None si el código no existe."""
     conn = get_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT prospecto_nombre, usos_permitidos, usos_realizados "
-            "FROM codigos_acceso WHERE codigo = %s",
-            (codigo,),
-        )
-        fila = cur.fetchone()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT prospecto_nombre, usos_permitidos, usos_realizados "
+                "FROM codigos_acceso WHERE codigo = %s",
+                (codigo,),
+            )
+            fila = cur.fetchone()
+    finally:
+        conn.close()
     if fila is None:
         return None
     return {
@@ -75,13 +79,16 @@ def validar_codigo(codigo: str):
 def incrementar_uso(codigo: str):
     """Suma 1 al contador de usos_realizados después de una auditoría exitosa."""
     conn = get_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE codigos_acceso SET usos_realizados = usos_realizados + 1 "
-            "WHERE codigo = %s",
-            (codigo,),
-        )
-    conn.commit()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE codigos_acceso SET usos_realizados = usos_realizados + 1 "
+                "WHERE codigo = %s",
+                (codigo,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 # ==============================================================================
 # 1. CONFIGURACIÓN GENERAL DE LA PÁGINA
