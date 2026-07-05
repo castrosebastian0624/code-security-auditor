@@ -138,7 +138,7 @@ CUSTOM_CSS = """
 
     .app-header-title .header-icon {
         -webkit-text-fill-color: initial;
-        filter: drop-shadow(0 0 12px rgba(96,165,250,0.5));
+        filter: drop-shadow(0 0 4px rgba(96,165,250,0.25));
     }
 
     .app-header-subtitle {
@@ -156,7 +156,7 @@ CUSTOM_CSS = """
         left: -100px;
         width: 420px;
         height: 260px;
-        background: radial-gradient(circle, rgba(96,165,250,0.16) 0%, rgba(167,139,250,0.08) 45%, transparent 75%);
+        background: radial-gradient(circle, rgba(96,165,250,0.08) 0%, rgba(167,139,250,0.04) 45%, transparent 75%);
         pointer-events: none;
         z-index: 0;
     }
