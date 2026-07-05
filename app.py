@@ -123,21 +123,42 @@ CUSTOM_CSS = """
 
     /* Título principal con acento en degradado sutil */
     .app-header-title {
-        font-size: 2.1rem;
+        font-size: 2.8rem;
         font-weight: 800;
-        letter-spacing: -0.02em;
-        margin-bottom: 0.2rem;
+        letter-spacing: -0.03em;
+        margin-bottom: 0.3rem;
         display: flex;
         align-items: center;
-        gap: 0.6rem;
+        gap: 0.7rem;
+        background: linear-gradient(90deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    .app-header-title .header-icon {
+        -webkit-text-fill-color: initial;
+        filter: drop-shadow(0 0 12px rgba(96,165,250,0.5));
     }
 
     .app-header-subtitle {
-        opacity: 0.65;
-        font-size: 0.98rem;
-        margin-top: -0.3rem;
-        max-width: 640px;
-        line-height: 1.5;
+        opacity: 0.68;
+        font-size: 1.05rem;
+        margin-top: -0.2rem;
+        max-width: 680px;
+        line-height: 1.55;
+    }
+
+    /* Glow decorativo detrás del encabezado, contenido y sutil (no rompe legibilidad) */
+    .header-glow {
+        position: absolute;
+        top: -60px;
+        left: -100px;
+        width: 420px;
+        height: 260px;
+        background: radial-gradient(circle, rgba(96,165,250,0.16) 0%, rgba(167,139,250,0.08) 45%, transparent 75%);
+        pointer-events: none;
+        z-index: 0;
     }
 
     /* Tarjeta base reutilizable */
@@ -145,15 +166,16 @@ CUSTOM_CSS = """
         border-radius: 14px;
         padding: 1.3rem 1.5rem;
         margin-bottom: 1rem;
-        border: 1px solid rgba(255,255,255,0.07);
-        background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.015) 100%);
-        box-shadow: 0 4px 14px rgba(0,0,0,0.18);
-        transition: transform 0.15s ease, box-shadow 0.15s ease;
+        border: 1px solid rgba(255,255,255,0.09);
+        background: linear-gradient(135deg, rgba(255,255,255,0.045) 0%, rgba(255,255,255,0.015) 100%);
+        box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+        transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
     }
 
     .vuln-card:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 6px 20px rgba(0,0,0,0.28);
+        transform: translateY(-2px);
+        box-shadow: 0 10px 28px rgba(0,0,0,0.35);
+        border-color: rgba(255,255,255,0.16);
     }
 
     .vuln-card h4 {
@@ -568,10 +590,14 @@ with st.sidebar:
 col_titulo, col_spacer = st.columns([3, 1])
 with col_titulo:
     st.markdown(
-        "<div class='app-header-title'>🛡️ Auditor Automatizado de Código</div>"
+        "<div style='position: relative;'>"
+        "<div class='header-glow'></div>"
+        "<div class='app-header-title'>"
+        "<span class='header-icon'>🛡️</span>Auditor Automatizado de Código</div>"
         "<p class='app-header-subtitle'>Detección de IDOR, fugas de datos, "
         "secretos hardcodeados e inyecciones — con inteligencia artificial "
-        "especializada en ciberseguridad.</p>",
+        "especializada en ciberseguridad.</p>"
+        "</div>",
         unsafe_allow_html=True,
     )
 
