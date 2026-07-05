@@ -108,87 +108,138 @@ st.set_page_config(
 # ------------------------------------------------------------------------------
 CUSTOM_CSS = """
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+    }
+
     /* Tipografía y espaciados generales */
     .block-container {
-        padding-top: 2rem;
+        padding-top: 2.2rem;
         padding-bottom: 3rem;
+        max-width: 1100px;
+    }
+
+    /* Título principal con acento en degradado sutil */
+    .app-header-title {
+        font-size: 2.1rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        margin-bottom: 0.2rem;
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+    }
+
+    .app-header-subtitle {
+        opacity: 0.65;
+        font-size: 0.98rem;
+        margin-top: -0.3rem;
+        max-width: 640px;
+        line-height: 1.5;
     }
 
     /* Tarjeta base reutilizable */
     .vuln-card {
-        border-radius: 12px;
-        padding: 1.1rem 1.3rem;
-        margin-bottom: 0.9rem;
-        border: 1px solid rgba(255,255,255,0.08);
-        background: rgba(255,255,255,0.02);
+        border-radius: 14px;
+        padding: 1.3rem 1.5rem;
+        margin-bottom: 1rem;
+        border: 1px solid rgba(255,255,255,0.07);
+        background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.015) 100%);
+        box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .vuln-card:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 20px rgba(0,0,0,0.28);
     }
 
     .vuln-card h4 {
-        margin: 0 0 0.35rem 0;
-        font-size: 1.05rem;
+        margin: 0 0 0.4rem 0;
+        font-size: 1.08rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
     }
 
     .vuln-meta {
         font-size: 0.82rem;
-        opacity: 0.75;
-        margin-bottom: 0.5rem;
+        opacity: 0.7;
+        margin-bottom: 0.6rem;
     }
 
     .badge {
         display: inline-block;
-        padding: 0.15rem 0.6rem;
+        padding: 0.2rem 0.65rem;
         border-radius: 999px;
-        font-size: 0.72rem;
+        font-size: 0.7rem;
         font-weight: 700;
-        letter-spacing: 0.03em;
+        letter-spacing: 0.04em;
         text-transform: uppercase;
         margin-right: 0.4rem;
     }
 
     /* Colores por severidad */
     .sev-critica, .sev-alta {
-        border-left: 5px solid #ef4444;
+        border-left: 4px solid #ef4444;
     }
     .badge-critica, .badge-alta {
-        background: rgba(239,68,68,0.15);
-        color: #ef4444;
+        background: rgba(239,68,68,0.16);
+        color: #f87171;
     }
 
     .sev-media {
-        border-left: 5px solid #f59e0b;
+        border-left: 4px solid #f59e0b;
     }
     .badge-media {
-        background: rgba(245,158,11,0.15);
-        color: #f59e0b;
+        background: rgba(245,158,11,0.16);
+        color: #fbbf24;
     }
 
     .sev-baja, .sev-informativa {
-        border-left: 5px solid #3b82f6;
+        border-left: 4px solid #3b82f6;
     }
     .badge-baja, .badge-informativa {
-        background: rgba(59,130,246,0.15);
-        color: #3b82f6;
+        background: rgba(59,130,246,0.16);
+        color: #60a5fa;
     }
 
     .code-line-tag {
         font-family: 'Courier New', monospace;
-        background: rgba(255,255,255,0.06);
-        padding: 0.1rem 0.5rem;
+        background: rgba(255,255,255,0.07);
+        padding: 0.12rem 0.55rem;
         border-radius: 6px;
         font-size: 0.78rem;
     }
 
     .fix-box {
-        background: rgba(16,185,129,0.08);
-        border: 1px solid rgba(16,185,129,0.25);
-        border-radius: 8px;
-        padding: 0.6rem 0.8rem;
-        margin-top: 0.5rem;
+        background: rgba(16,185,129,0.07);
+        border: 1px solid rgba(16,185,129,0.22);
+        border-radius: 10px;
+        padding: 0.7rem 0.9rem;
+        margin-top: 0.6rem;
         font-size: 0.88rem;
+        line-height: 1.5;
     }
 
     .fix-box b {
-        color: #10b981;
+        color: #34d399;
+    }
+
+    /* Botón primario con más presencia visual */
+    div.stButton > button[kind="primary"] {
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        box-shadow: 0 3px 10px rgba(59,130,246,0.25);
+    }
+
+    /* Métricas nativas con un poco más de aire */
+    div[data-testid="stMetric"] {
+        background: rgba(255,255,255,0.02);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 12px;
+        padding: 0.8rem 1rem;
     }
 </style>
 """
@@ -516,11 +567,11 @@ with st.sidebar:
 # ==============================================================================
 col_titulo, col_spacer = st.columns([3, 1])
 with col_titulo:
-    st.title("🛡️ Auditor Automatizado de Código")
     st.markdown(
-        "<p style='opacity:0.7; margin-top:-0.6rem;'>Detección de IDOR, fugas de datos, "
-        "secretos hardcodeados e inyecciones — con inteligencia artificial especializada "
-        "en ciberseguridad.</p>",
+        "<div class='app-header-title'>🛡️ Auditor Automatizado de Código</div>"
+        "<p class='app-header-subtitle'>Detección de IDOR, fugas de datos, "
+        "secretos hardcodeados e inyecciones — con inteligencia artificial "
+        "especializada en ciberseguridad.</p>",
         unsafe_allow_html=True,
     )
 

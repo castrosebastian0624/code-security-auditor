@@ -1,0 +1,10 @@
+[theme]
+# Paleta oscura, tipo "producto de seguridad" — azul acero como acento
+# principal (transmite confianza/tecnología), fondo oscuro premium en vez
+# del gris genérico por defecto de Streamlit.
+base = "dark"
+primaryColor = "#3B82F6"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#161B22"
+textColor = "#E6EDF3"
+font = "sans serif"
