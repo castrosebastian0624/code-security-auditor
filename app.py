@@ -228,8 +228,19 @@ activamente como una lista de verificación, no esperes a "verlo" en el código:
 - ¿El endpoint de login/autenticación tiene límite de intentos (rate limiting) o
   protección contra fuerza bruta? Si no hay ninguna mención de límite de tasa,
   bloqueo por intentos fallidos, o captcha, repórtalo como hallazgo.
-- ¿Los endpoints que modifican datos (POST/PUT/PATCH/DELETE) validan un token
-  CSRF cuando aplica (si el contexto sugiere que se accede desde un navegador)?
+- ¿Los endpoints que modifican datos sensibles (dinero, permisos, datos de otros
+  usuarios) NO tienen absolutamente ningún chequeo de autenticación o autorización
+  antes de ejecutar la acción? Esto es DISTINTO de un IDOR (que sí valida sesión
+  pero no ownership): aquí es la ausencia TOTAL de cualquier validación de sesión.
+  Repórtalo como su propio hallazgo CRÍTICO e independiente, con título tipo
+  "Endpoint sin autenticación" — no lo mezcles solo como nota dentro de otro hallazgo.
+- ¿Los endpoints que modifican estado (POST/PUT/PATCH/DELETE) validan un token
+  CSRF? SOLO reporta ausencia de CSRF si el código usa autenticación basada en
+  cookies/sesión de servidor. Si la autenticación es vía token Bearer en el
+  header Authorization (JWT, API keys, etc.), NO reportes ausencia de CSRF: ese
+  esquema ya es inherentemente resistente a CSRF clásico porque el navegador no
+  adjunta ese header automáticamente. Reportar CSRF en una API basada en tokens
+  es un error de análisis, evítalo.
 - ¿Hay límites de tamaño/longitud en inputs de usuario (para prevenir DoS por
   payloads gigantes)?
 - ¿Los endpoints sensibles (pagos, cambios de contraseña, admin) registran
@@ -238,8 +249,9 @@ activamente como una lista de verificación, no esperes a "verlo" en el código:
   manualmente (ej. Content-Security-Policy, X-Frame-Options)?
 Si identificas la ausencia de alguno de estos controles en un endpoint donde
 aplicaría razonablemente, inclúyelo como una vulnerabilidad más en la lista,
-usando la categoría "CWE-693 Protection Mechanism Failure" o la más específica
-que corresponda, y describe QUÉ falta y en qué endpoint exactamente.
+usando la categoría "CWE-693 Protection Mechanism Failure", "CWE-306 Missing
+Authentication for Critical Function" o la más específica que corresponda, y
+describe QUÉ falta y en qué endpoint exactamente.
 
 Devuelve ÚNICAMENTE un JSON con esta estructura EXACTA (respeta los nombres de las llaves):
 
