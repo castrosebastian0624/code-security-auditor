@@ -21,6 +21,7 @@ import os
 import re
 from datetime import datetime
 from dotenv import load_dotenv
+import psycopg2
 
 # ------------------------------------------------------------------------------
 # Carga variables desde un archivo .env local (si existe) hacia el entorno del
@@ -36,6 +37,51 @@ load_dotenv()
 # final jamás ve ni maneja la key de OpenRouter, solo usa la app.
 # ------------------------------------------------------------------------------
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+
+# ------------------------------------------------------------------------------
+# Conexión a la base de datos Neon (Postgres) que controla los códigos de
+# acceso de prospectos y cuántas auditorías gratuitas le quedan a cada uno.
+# ------------------------------------------------------------------------------
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+
+@st.cache_resource
+def get_connection():
+    """Reutiliza la misma conexión mientras la app esté viva, en vez de abrir
+    una nueva por cada interacción del usuario."""
+    return psycopg2.connect(DATABASE_URL)
+
+
+def validar_codigo(codigo: str):
+    """Busca el código en la base de datos. Devuelve un dict con la info del
+    prospecto y sus usos, o None si el código no existe."""
+    conn = get_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT prospecto_nombre, usos_permitidos, usos_realizados "
+            "FROM codigos_acceso WHERE codigo = %s",
+            (codigo,),
+        )
+        fila = cur.fetchone()
+    if fila is None:
+        return None
+    return {
+        "prospecto_nombre": fila[0],
+        "usos_permitidos": fila[1],
+        "usos_realizados": fila[2],
+    }
+
+
+def incrementar_uso(codigo: str):
+    """Suma 1 al contador de usos_realizados después de una auditoría exitosa."""
+    conn = get_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE codigos_acceso SET usos_realizados = usos_realizados + 1 "
+            "WHERE codigo = %s",
+            (codigo,),
+        )
+    conn.commit()
 
 # ==============================================================================
 # 1. CONFIGURACIÓN GENERAL DE LA PÁGINA
@@ -288,15 +334,49 @@ with st.sidebar:
     # del lado del servidor (OPENROUTER_API_KEY) y es 100% transparente para
     # el cliente final. Solo mostramos un indicador de estado de conexión.
     if OPENROUTER_API_KEY:
-        st.success("✅ Motor de IA conectado")
+        st.success("✅ Sistema listo")
     else:
-        st.error("⚠️ Falta configurar OPENROUTER_API_KEY en el servidor.")
+        st.error("⚠️ El sistema no está disponible en este momento. Contacta al administrador.")
 
-    modelo_seleccionado = st.text_input(
-        "Modelo (slug de OpenRouter)",
-        value="z-ai/glm-5.2",
-        help="Verifica el slug exacto y vigente en openrouter.ai/models. Zhipu actualiza versiones con frecuencia.",
+    st.divider()
+
+    # ---- Gate de código de acceso ------------------------------------------
+    # Cada prospecto recibe un código único con un número limitado de usos
+    # (típicamente 2, para el diagnóstico gratuito). Esto evita que la URL
+    # pública se use de forma ilimitada por cualquier persona.
+    codigo_ingresado = st.text_input(
+        "Código de acceso",
+        placeholder="Ej: DEMO-JUAN2026",
+        help="Te lo proporcionó Sebastian directamente. Si no tienes uno, contáctalo.",
     )
+
+    info_codigo = None
+    codigo_valido = False
+
+    if codigo_ingresado:
+        try:
+            info_codigo = validar_codigo(codigo_ingresado.strip())
+        except Exception as e:
+            st.error(f"Error validando el código: {e}")
+            info_codigo = None
+
+        if info_codigo is None:
+            st.error("❌ Código no reconocido.")
+        else:
+            usos_restantes = info_codigo["usos_permitidos"] - info_codigo["usos_realizados"]
+            if usos_restantes > 0:
+                codigo_valido = True
+                st.success(f"✅ Código válido — te quedan {usos_restantes} auditoría(s) gratuita(s).")
+            else:
+                st.warning(
+                    "⚠️ Ya usaste todas tus auditorías gratuitas con este código. "
+                    "Contacta a Sebastian para continuar."
+                )
+
+    # El modelo de IA usado es una decisión interna del negocio, no algo que
+    # el visitante necesite ver ni tocar. Se configura vía variable de entorno
+    # (con un valor por defecto razonable) en vez de un campo visible en la UI.
+    modelo_seleccionado = os.environ.get("AI_MODEL", "z-ai/glm-5.2")
 
     st.divider()
 
@@ -310,9 +390,6 @@ with st.sidebar:
     st.divider()
     iniciar = st.button("🔍 Iniciar Auditoría de Seguridad", type="primary", use_container_width=True)
 
-    st.divider()
-    st.caption("💡 GLM-5.2 vía OpenRouter — bajo costo, alta capacidad de razonamiento sobre código.")
-
 
 # ==============================================================================
 # 5. HEADER PRINCIPAL
@@ -322,7 +399,8 @@ with col_titulo:
     st.title("🛡️ Auditor Automatizado de Código")
     st.markdown(
         "<p style='opacity:0.7; margin-top:-0.6rem;'>Detección de IDOR, fugas de datos, "
-        "secretos hardcodeados e inyecciones — impulsado por GLM-5.2.</p>",
+        "secretos hardcodeados e inyecciones — con inteligencia artificial especializada "
+        "en ciberseguridad.</p>",
         unsafe_allow_html=True,
     )
 
@@ -337,7 +415,12 @@ if "resultado_auditoria" not in st.session_state:
 # 6. LÓGICA PRINCIPAL — Al presionar el botón
 # ==============================================================================
 if iniciar:
-    if not OPENROUTER_API_KEY:
+    if not codigo_ingresado or not codigo_valido:
+        st.error(
+            "⚠️ Necesitas un código de acceso válido con auditorías disponibles "
+            "para usar esta herramienta. Ingrésalo en la barra lateral."
+        )
+    elif not OPENROUTER_API_KEY:
         st.error(
             "⚠️ El servidor no tiene configurada la variable de entorno "
             "OPENROUTER_API_KEY. Este es un problema de configuración interna, "
@@ -359,7 +442,7 @@ if iniciar:
                 )
                 codigo_texto = codigo_texto[:LIMITE_CARACTERES]
 
-            with st.spinner("🧠 GLM-5.2 está analizando tu código en busca de vulnerabilidades..."):
+            with st.spinner("🧠 Analizando tu código en busca de vulnerabilidades..."):
                 resultado = llamar_auditor(
                     api_key=OPENROUTER_API_KEY,
                     modelo=modelo_seleccionado,
@@ -369,6 +452,14 @@ if iniciar:
                 st.session_state.resultado_auditoria = resultado
                 st.session_state.hora_auditoria = datetime.now().strftime("%d/%m/%Y %H:%M")
 
+                # Solo se descuenta un uso si la auditoría se completó con éxito
+                # (si hubo error de conexión o JSON inválido, no se le cobra el
+                # intento al prospecto).
+                try:
+                    incrementar_uso(codigo_ingresado.strip())
+                except Exception as e:
+                    st.warning(f"No se pudo registrar el uso del código: {e}")
+
         except json.JSONDecodeError:
             st.error(
                 "❌ El modelo no devolvió un JSON válido. Esto puede pasar ocasionalmente con "
@@ -376,7 +467,7 @@ if iniciar:
             )
         except Exception as e:
             # Errores típicos: 401 (API key inválida), 402 (sin créditos), 404 (modelo no existe)
-            st.error(f"❌ Ocurrió un error al conectar con OpenRouter: {e}")
+            st.error(f"❌ Ocurrió un error al procesar la auditoría: {e}")
 
 
 # ==============================================================================
