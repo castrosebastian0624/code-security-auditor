@@ -221,6 +221,26 @@ Debes analizar el archivo buscando específicamente (pero no limitándote a):
 - Manejo inseguro de archivos (path traversal, subida de archivos sin restricción de tipo).
 - Uso de funciones o librerías conocidas como inseguras o deprecadas para criptografía.
 
+ADEMÁS de vulnerabilidades por código presente, debes evaluar de forma explícita
+la AUSENCIA de controles de seguridad esperados en el tipo de endpoint analizado.
+La ausencia de un control no deja un patrón de texto peligroso, así que revísalo
+activamente como una lista de verificación, no esperes a "verlo" en el código:
+- ¿El endpoint de login/autenticación tiene límite de intentos (rate limiting) o
+  protección contra fuerza bruta? Si no hay ninguna mención de límite de tasa,
+  bloqueo por intentos fallidos, o captcha, repórtalo como hallazgo.
+- ¿Los endpoints que modifican datos (POST/PUT/PATCH/DELETE) validan un token
+  CSRF cuando aplica (si el contexto sugiere que se accede desde un navegador)?
+- ¿Hay límites de tamaño/longitud en inputs de usuario (para prevenir DoS por
+  payloads gigantes)?
+- ¿Los endpoints sensibles (pagos, cambios de contraseña, admin) registran
+  actividad para auditoría/monitoreo, o no hay ningún logging de seguridad?
+- ¿Hay cabeceras de seguridad ausentes si el código configura respuestas HTTP
+  manualmente (ej. Content-Security-Policy, X-Frame-Options)?
+Si identificas la ausencia de alguno de estos controles en un endpoint donde
+aplicaría razonablemente, inclúyelo como una vulnerabilidad más en la lista,
+usando la categoría "CWE-693 Protection Mechanism Failure" o la más específica
+que corresponda, y describe QUÉ falta y en qué endpoint exactamente.
+
 Devuelve ÚNICAMENTE un JSON con esta estructura EXACTA (respeta los nombres de las llaves):
 
 {
