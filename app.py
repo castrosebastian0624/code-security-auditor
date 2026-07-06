@@ -454,8 +454,8 @@ def llamar_auditor(api_key: str, modelo: str, codigo: str, nombre_archivo: str) 
         # Headers recomendados por OpenRouter para atribución/ranking (opcionales
         # pero buena práctica, no afectan la funcionalidad si se dejan genéricos).
         default_headers={
-            "HTTP-Referer": "https://ghostflow-auditor.local",
-            "X-Title": "GhostFlow Security Auditor MVP",
+            "HTTP-Referer": "https://code-security-auditor.streamlit.app",
+            "X-Title": "Auditor de Seguridad de Codigo",
         },
     )
 
@@ -477,6 +477,13 @@ Recuerda: responde ÚNICAMENTE con el objeto JSON especificado en tus instruccio
         ],
         temperature=0.1,  # Baja temperatura: queremos consistencia técnica, no creatividad
         max_tokens=16000,
+        # Fuerza Zero Data Retention: OpenRouter solo enrutará esta petición a
+        # proveedores que garanticen NO almacenar ni entrenar con el contenido
+        # enviado. Verificado manualmente que 21 de los 28 proveedores que
+        # hospedan GLM-5.2 cumplen "Zero retention" / "Private", así que esto
+        # sigue dejando amplio margen de enrutamiento (precio/velocidad) sin
+        # riesgo real de quedarse sin ningún proveedor disponible.
+        extra_body={"zdr": True},
     )
 
     contenido = respuesta.choices[0].message.content
