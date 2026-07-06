@@ -476,7 +476,7 @@ Recuerda: responde ÚNICAMENTE con el objeto JSON especificado en tus instruccio
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.1,  # Baja temperatura: queremos consistencia técnica, no creatividad
-        max_tokens=8000,
+        max_tokens=16000,
     )
 
     contenido = respuesta.choices[0].message.content
