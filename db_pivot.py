@@ -33,27 +33,26 @@ def get_connection():
 # usuarios
 # ==============================================================================
 
-def obtener_o_crear_usuario(email: str, nombre: str | None = None) -> int:
+def obtener_o_crear_usuario_clerk(clerk_user_id: str, email: str, nombre: str | None = None) -> int:
     """
-    Upsert simple por email. No hay autenticación real todavía (ver
-    comentario en migrations/002_pivot_schema.sql) — cualquiera que escriba
-    un email se identifica como ese usuario. Es un hueco de seguridad
-    conocido y aceptado para esta fase (no hay nada de valor detrás del
-    email todavía, solo el registro de qué dominios se intentan verificar);
-    hay que resolverlo con autenticación real antes de la Fase de cobros.
+    Upsert por clerk_user_id (el claim `sub` del token OIDC que devuelve
+    Clerk -- ver auth.py). Reemplaza el upsert por email sin verificación de
+    la Fase 1 original (migración 004): email y nombre se sincronizan en
+    cada login, pero ya no son la identidad -- esa es clerk_user_id.
     """
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO usuarios (email, nombre)
-                VALUES (%s, %s)
-                ON CONFLICT (email) DO UPDATE
-                    SET nombre = COALESCE(EXCLUDED.nombre, usuarios.nombre)
+                INSERT INTO usuarios (clerk_user_id, email, nombre)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (clerk_user_id) DO UPDATE
+                    SET email = EXCLUDED.email,
+                        nombre = COALESCE(EXCLUDED.nombre, usuarios.nombre)
                 RETURNING id
                 """,
-                (email.strip().lower(), nombre),
+                (clerk_user_id, email.strip().lower(), nombre),
             )
             usuario_id = cur.fetchone()[0]
         conn.commit()

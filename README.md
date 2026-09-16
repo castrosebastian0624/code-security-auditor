@@ -52,6 +52,11 @@ Antes de escanear cualquier dominio, el sistema exige **verificar propiedad**
 del dominio (registro DNS TXT o archivo en ruta conocida) — ver
 `verificacion_dominio.py` y `pages/1_Verificar_Dominio.py`.
 
+La identidad del usuario en el flujo del pivote es **Clerk** (login OIDC vía
+`st.login()` nativo de Streamlit, no email sin verificar) — ver `auth.py`
+para el detalle de por qué se eligió esa opción y qué queda resuelto por la
+librería vs. construido a mano.
+
 El nuevo esquema de base de datos (`usuarios`, `proyectos`, `escaneos`,
 `hallazgos`) convive con `codigos_acceso` durante la transición — ver
 `migrations/`.
@@ -77,12 +82,20 @@ DATABASE_URL=postgresql://usuario:password@host/dbname
 
 Opcional: `AI_MODEL=z-ai/glm-5.2` (si no se define, ese es el default).
 
+Para el login con Clerk, copia `.streamlit/secrets.toml.example` a
+`.streamlit/secrets.toml` (ya está en `.gitignore`) y completa las claves
+`client_id`, `client_secret` y `server_metadata_url` con los valores que
+Clerk muestra al crear una OAuth application (Config > OAuth applications en
+su dashboard) — ver comentarios en el archivo de ejemplo para el detalle.
+
 Aplica las migraciones SQL en orden contra tu base de Neon (ver
 `migrations/README.md` para el detalle de cada una):
 
 ```bash
 psql "$DATABASE_URL" -f migrations/001_codigos_acceso.sql
 psql "$DATABASE_URL" -f migrations/002_pivot_schema.sql
+psql "$DATABASE_URL" -f migrations/003_expiracion_token.sql
+psql "$DATABASE_URL" -f migrations/004_clerk_identity.sql
 ```
 
 Corre la app:
@@ -100,13 +113,16 @@ python generar_codigo.py
 ## Estructura del repo
 
 ```
-app.py                      Flujo actual: sube código -> auditoría por archivo
-verificacion_dominio.py     Verificación de propiedad de dominio (DNS TXT / archivo HTTP)
-db_pivot.py                 Acceso a las tablas nuevas del pivote (usuarios/proyectos/escaneos/hallazgos)
-pages/                      Páginas adicionales de la app multipágina de Streamlit
-generar_codigo.py           Script interno (NO se despliega) para generar códigos de acceso
-migrations/                 Migraciones SQL, en orden, con su propio README
-.streamlit/config.toml      Tema visual de la app
+app.py                          Flujo actual: sube código -> auditoría por archivo
+verificacion_dominio.py         Verificación de propiedad de dominio (DNS TXT / archivo HTTP)
+safe_http.py                    Cliente HTTP compartido: resuelve DNS una vez, bloquea SSRF, fija la IP (cierra DNS rebinding)
+auth.py                         Login con Clerk (OIDC vía st.login() nativo de Streamlit)
+db_pivot.py                     Acceso a las tablas nuevas del pivote (usuarios/proyectos/escaneos/hallazgos)
+pages/                          Páginas adicionales de la app multipágina de Streamlit
+generar_codigo.py               Script interno (NO se despliega) para generar códigos de acceso
+migrations/                     Migraciones SQL, en orden, con su propio README
+.streamlit/config.toml          Tema visual de la app
+.streamlit/secrets.toml.example Plantilla de configuración de Clerk (el archivo real NO se comitea)
 ```
 
 ## Estado del proyecto
