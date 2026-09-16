@@ -14,6 +14,7 @@ conexión guardada de una sesión anterior quedaría muerta.
 ================================================================================
 """
 
+import json
 import os
 
 import psycopg2
@@ -249,3 +250,143 @@ def crear_escaneo(proyecto_id: int, disparado_por: str = "manual") -> int:
         return escaneo_id
     finally:
         conn.close()
+
+
+def marcar_escaneo_en_progreso(escaneo_id: int) -> None:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE escaneos SET estado = 'en_progreso' WHERE id = %s", (escaneo_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def marcar_escaneo_completado(escaneo_id: int) -> None:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE escaneos SET estado = 'completado', finalizado_en = now() WHERE id = %s",
+                (escaneo_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def marcar_escaneo_fallido(escaneo_id: int) -> None:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE escaneos SET estado = 'fallido', finalizado_en = now() WHERE id = %s",
+                (escaneo_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def guardar_stack_detectado(proyecto_id: int, stack: str) -> None:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE proyectos SET stack_detectado = %s WHERE id = %s", (stack, proyecto_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ==============================================================================
+# hallazgos
+# ==============================================================================
+
+def crear_hallazgo(
+    escaneo_id: int,
+    tipo_check: str,
+    severidad: str,
+    titulo: str,
+    descripcion: str | None = None,
+    impacto_potencial: str | None = None,
+    sugerencia_tecnica: str | None = None,
+    evidencia_metadata: dict | None = None,
+) -> int:
+    """
+    evidencia_metadata pasa por el trigger trg_validar_evidencia_metadata
+    (defensa en profundidad, ver migrations/002 y 005) -- si alguna clave no
+    está en el allowlist, psycopg2 propaga la excepción de Postgres tal cual.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO hallazgos (
+                    escaneo_id, tipo_check, severidad, titulo,
+                    descripcion, impacto_potencial, sugerencia_tecnica, evidencia_metadata
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    escaneo_id, tipo_check, severidad, titulo,
+                    descripcion, impacto_potencial, sugerencia_tecnica,
+                    json.dumps(evidencia_metadata) if evidencia_metadata is not None else None,
+                ),
+            )
+            hallazgo_id = cur.fetchone()[0]
+        conn.commit()
+        return hallazgo_id
+    finally:
+        conn.close()
+
+
+def listar_hallazgos(escaneo_id: int) -> list[dict]:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, tipo_check, severidad, titulo, descripcion,
+                       impacto_potencial, sugerencia_tecnica, evidencia_metadata, creado_en
+                FROM hallazgos
+                WHERE escaneo_id = %s
+                ORDER BY
+                    CASE severidad
+                        WHEN 'CRITICA' THEN 0 WHEN 'ALTA' THEN 1 WHEN 'MEDIA' THEN 2
+                        WHEN 'BAJA' THEN 3 ELSE 4
+                    END
+                """,
+                (escaneo_id,),
+            )
+            filas = cur.fetchall()
+    finally:
+        conn.close()
+
+    campos = [
+        "id", "tipo_check", "severidad", "titulo", "descripcion",
+        "impacto_potencial", "sugerencia_tecnica", "evidencia_metadata", "creado_en",
+    ]
+    return [dict(zip(campos, fila)) for fila in filas]
+
+
+def listar_escaneos(proyecto_id: int) -> list[dict]:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, estado, disparado_por, iniciado_en, finalizado_en
+                FROM escaneos
+                WHERE proyecto_id = %s
+                ORDER BY iniciado_en DESC
+                """,
+                (proyecto_id,),
+            )
+            filas = cur.fetchall()
+    finally:
+        conn.close()
+
+    campos = ["id", "estado", "disparado_por", "iniciado_en", "finalizado_en"]
+    return [dict(zip(campos, fila)) for fila in filas]
