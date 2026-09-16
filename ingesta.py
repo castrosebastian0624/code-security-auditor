@@ -28,47 +28,39 @@ SSRF: el dominio principal ya está verificado, pero su JS no está bajo
 control nuestro -- un bundle comprometido (o simplemente un tercero
 embebido, un pixel, un widget) podría hacer que el navegador pida algo a
 169.254.169.254 (metadata de nube) o a una IP interna del propio host donde
-corre el escáner. Dos capas:
+corre el escáner, y eso puede pasar en CUALQUIER dominio que la página
+cargue, no solo el principal. Cuatro capas, de la más rápida/barata a la
+que de verdad cierra el problema:
 
   1. Antes de navegar: se resuelve y valida el dominio principal con
-     safe_http.resolver_ip_publica_unica() -- la MISMA función que usa
-     safe_http.py, no una reimplementación paralela que se pueda desincronizar.
-  2. page.route("**/*", ...) intercepta TODA request que el navegador haga
-     durante el render (no solo la navegación inicial) y la aborta si su
-     host no resuelve a una IP pública.
+     safe_http.resolver_ip_publica_unica() -- rechazo rápido sin ni
+     siquiera arrancar un navegador.
+  2. page.route("**/*", ...) intercepta toda request que Playwright haga y
+     la aborta si su host no resuelve a una IP pública -- rechazo a nivel
+     de aplicación, antes de que la request llegue a la red.
+  3. --host-resolver-rules fija el dominio PRINCIPAL a la IP ya validada al
+     lanzar Chromium -- redundante ahora que existe la capa 4 (ver abajo:
+     con un proxy configurado, Chromium ni siquiera resuelve DNS localmente
+     para tráfico proxied), pero se deja como protección adicional barata
+     por si alguna ruta interna de Chromium llegara a saltarse el proxy.
+  4. PROXY DE SALIDA (proxy_saliente.py) -- el mecanismo que de verdad
+     cierra el hueco que las capas 1-3 no podían: TODO el tráfico de
+     Chromium, sin importar el dominio (principal o cualquier subrecurso
+     cross-origin -- fuentes, CDNs, widgets, redirects a otro host), se
+     enruta a través de un proxy de reenvío local (chromium.launch(proxy=...)).
+     Cada conexión se resuelve y valida ahí, justo antes de abrir el socket
+     real -- mismo patrón que _ConexionIPFija en safe_http.py, ahora
+     aplicado a CUALQUIER destino, no solo al que nosotros elegimos pinear
+     de antemano. Ver proxy_saliente.py para el detalle de implementación
+     y por qué no hace falta MITM (el proxy solo permite/rechaza el
+     destino, nunca decripta ni inspecciona el tráfico HTTPS).
 
-Límite honesto de esta capa 2: page.route() nos deja inspeccionar/abortar/
-continuar, pero NO fijar la IP de destino de la conexión real de Chromium
-como sí hace _ConexionIPFija en safe_http.py -- entre que validamos el host
-y Chromium conecta de verdad, hay una ventana de TOCTOU (DNS rebinding)
-que esta capa NO cierra con la misma garantía que safe_http.get(). Se
-documenta así a propósito en vez de aparentar paridad total.
-
-CAPA 3 -- --host-resolver-rules para el dominio PRINCIPAL: se resuelve y
-valida su IP una sola vez (otra vez, safe_http.resolver_ip_publica_unica)
-y se la pasa a Chromium como `--host-resolver-rules=MAP <host> <ip>` al
-lanzar el navegador. Esto sí cierra el TOCTOU para ese host específico --
-Chromium ya no vuelve a resolver su DNS, conecta directo a la IP fijada
-(el hostname real se sigue usando para SNI/Host, Chromium no lo toca) --
-mismo patrón exacto que `_ConexionIPFija` en safe_http.py, aplicado ahora
-al lanzamiento del navegador en vez de a un socket que controlamos nosotros.
-
-Lo que esta capa 3 NO cubre, honestamente: cualquier subrecurso cross-origin
-que la página cargue desde OTRO dominio (fuentes, CDNs, widgets, un
-redirect del dominio principal a un host distinto) -- esos hosts no están
-en la regla de `--host-resolver-rules`, así que Chromium los resuelve
-normal y solo quedan cubiertos por la capa 2 (page.route()), con la misma
-ventana de TOCTOU que esa capa ya reconoce no cerrar del todo. Cerrar ESE
-residual necesita un filtro de red por debajo del navegador (proxy saliente
-o reglas de firewall a nivel de red/contenedor) -- no se construye todavía.
-
-TODO(fase-3-bloqueante): antes de que arranque el check de RLS/IDOR (Fase 3
--- ahí sí vamos a tocar credenciales/datos reales, no solo evidencia
-agregada), este residual de subrecursos cross-origin tiene que cerrarse con
-un proxy saliente o reglas de firewall a nivel de red, no quedarse solo con
-page.route(). Para los 3 checks pasivos de Fase 2 el riesgo residual es
-aceptable (el dominio principal SÍ está pineado, y no hay credenciales de
-terceros de por medio); para Fase 3 ya no es aceptable dejarlo así.
+Las capas 1-3 quedan como defensa en profundidad barata (rechazo más rápido
+en el caso común), pero la garantía real -- incluyendo el caso de un
+subrecurso cross-origin apuntando a una IP privada, que las capas 1-3 no
+podían cerrar -- vive en la capa 4. Probado en vivo: un fixture con la
+página principal pública cargando un subrecurso desde un segundo dominio
+que resuelve a una IP privada quedó bloqueado por el proxy.
 ================================================================================
 """
 
@@ -79,6 +71,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Route
 from playwright.sync_api import sync_playwright
 
+import proxy_saliente
 import safe_http
 
 TIMEOUT_DEFAULT_MS = 20_000
@@ -159,6 +152,7 @@ def ingerir_url(url: str, timeout_ms: int = TIMEOUT_DEFAULT_MS) -> ResultadoInge
         )
 
     args_navegador = ["--no-sandbox", f"--host-resolver-rules={_regla_host_resolver(host_principal, ip_principal)}"]
+    url_proxy = proxy_saliente.url_proxy()
 
     archivos_js: list[ArchivoJS] = []
     urls_vistas: set[str] = set()
@@ -181,7 +175,7 @@ def ingerir_url(url: str, timeout_ms: int = TIMEOUT_DEFAULT_MS) -> ResultadoInge
 
     try:
         with sync_playwright() as p:
-            navegador = p.chromium.launch(args=args_navegador)
+            navegador = p.chromium.launch(args=args_navegador, proxy={"server": url_proxy})
             try:
                 pagina = navegador.new_page()
                 pagina.route("**/*", _bloquear_si_no_publica)

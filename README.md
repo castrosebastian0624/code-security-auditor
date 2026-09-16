@@ -156,6 +156,7 @@ safe_http.py                    Cliente HTTP compartido: resuelve DNS una vez, b
 auth.py                         Login con Clerk (OIDC vía st.login() nativo de Streamlit)
 db_pivot.py                     Acceso a las tablas nuevas del pivote (usuarios/proyectos/escaneos/hallazgos)
 ingesta.py                      Renderizado con Playwright + extracción del bundle JS (Fase 2)
+proxy_saliente.py               Proxy de reenvío local: único canal de salida de Playwright, cierra SSRF en subrecursos cross-origin (Fase 2)
 fingerprinting.py               Detección de Supabase/Firebase sobre el bundle ya extraído (Fase 2)
 checks_pasivos.py               3 checks pasivos: headers, secretos en el bundle, dependencias vulnerables (Fase 2)
 motor_escaneo.py                Orquesta ingesta + fingerprinting + checks + LLM -> hallazgos (Fase 2)
