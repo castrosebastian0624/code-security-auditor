@@ -29,8 +29,22 @@ RUN pip install --no-cache-dir -r requirements.txt
 # --with-deps instala tanto los binarios del navegador como las librerías
 # de sistema Debian que Chromium headless necesita para correr (libnss3,
 # libatk, etc.) — este es el paso que, según el foro de Streamlit, falla o
-# queda incompleto en Community Cloud.
-RUN playwright install --with-deps chromium
+# queda incompleto en Community Cloud. `playwright install chromium` ya
+# descarga TANTO el Chrome completo COMO el "Chrome Headless Shell" (el que
+# usa page.launch() por defecto) en la misma corrida -- confirmado con
+# `playwright install --dry-run chromium`, no hace falta un paso separado
+# para el headless shell.
+#
+# El retry es defensivo, no cosmético: durante Fase 2 el downloader de
+# Playwright falló repetidas veces con timeout contra el mismo host que
+# `curl` resolvía sin problema -- una falla de red real, reproducida varias
+# veces en un entorno de desarrollo. Nunca pasó dentro de un build de Render
+# (el PoC de Fase 1 construyó limpio), pero no hay garantía de que no pase
+# ahí también -- un retry de 3 intentos es barato y evita que un build entero
+# falle por un solo timeout transitorio de descarga.
+RUN for i in 1 2 3; do \
+        playwright install --with-deps chromium && break || sleep 5; \
+    done
 
 COPY test_app.py .
 

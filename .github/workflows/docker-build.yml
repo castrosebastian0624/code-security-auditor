@@ -1,0 +1,32 @@
+name: Docker build check
+
+# Solo construye la imagen -- no hace push a ningún registro. El objetivo es
+# validar que el Dockerfile de la raíz (ver Dockerfile) construye limpio,
+# sin necesitar Docker instalado en ninguna máquina local. Se dispara en
+# cada push a main que toque el Dockerfile/requirements/código de la app, y
+# también a mano desde la pestaña Actions (workflow_dispatch).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "requirements.txt"
+      - "**.py"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: auditor-ia:ci-check

@@ -39,3 +39,18 @@ Fase 2 (ingesta de URL con navegador real + motor de escaneo externo).
 Este servicio es desechable. Una vez que confirmes el resultado, bórralo
 desde el dashboard de Render (Settings → Delete Web Service) para no seguir
 pagando por él — no tiene ninguna lógica que valga la pena dejar corriendo.
+
+## Nota (Fase 2): no hay Dockerfile de producción todavía
+
+Este sigue siendo el único `Dockerfile` del repo -- la app real (`app.py` +
+el pivote) todavía no está containerizada. Cuando llegue el momento de armar
+el Dockerfile real, confirmar dos cosas que se verificaron en vivo durante
+Fase 2:
+
+1. `playwright install --with-deps chromium` (sin flags extra) ya descarga
+   TANTO el Chrome completo COMO el "Chrome Headless Shell" -- el que usa
+   Playwright por defecto en `launch()`. No hace falta un paso separado.
+2. El downloader de Playwright puede fallar con timeout por una falla de
+   red transitoria (visto varias veces en desarrollo local, nunca todavía
+   dentro de un build de Render) -- vale la pena mantener el retry de 3
+   intentos que ya tiene este Dockerfile.

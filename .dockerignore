@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+.streamlit/secrets.toml
+venv/
+__pycache__/
+*.pyc
+.claude/
+.devcontainer/
+render-poc/
+migrations/
+generar_codigo.py
+README.md
