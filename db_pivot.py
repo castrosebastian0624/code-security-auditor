@@ -19,6 +19,8 @@ import os
 import psycopg2
 from dotenv import load_dotenv
 
+from verificacion_dominio import generar_token
+
 load_dotenv()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -65,14 +67,19 @@ def obtener_o_crear_usuario(email: str, nombre: str | None = None) -> int:
 # ==============================================================================
 
 def crear_proyecto(usuario_id: int, dominio: str, metodo: str, token: str) -> int:
-    """Crea un proyecto en estado 'pendiente'. No verifica nada por sí solo."""
+    """
+    Crea un proyecto en estado 'pendiente'. No verifica nada por sí solo.
+    El token vence a las 48h — se calcula con `now()` del lado de la base
+    (no en Python) para no depender de que el reloj del proceso y el de
+    Neon coincidan.
+    """
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO proyectos (usuario_id, dominio, verification_method, verification_token)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO proyectos (usuario_id, dominio, verification_method, verification_token, verification_token_expires_at)
+                VALUES (%s, %s, %s, %s, now() + interval '48 hours')
                 RETURNING id
                 """,
                 (usuario_id, dominio, metodo, token),
@@ -84,7 +91,39 @@ def crear_proyecto(usuario_id: int, dominio: str, metodo: str, token: str) -> in
         conn.close()
 
 
+def regenerar_token(proyecto_id: int) -> str:
+    """
+    Genera un token nuevo (con 48h de vida nueva) para un proyecto existente
+    y lo vuelve a dejar en 'pendiente' — para cuando el token anterior
+    venció o el usuario simplemente quiere reintentar desde cero.
+    """
+    nuevo_token = generar_token()
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE proyectos
+                SET verification_token = %s,
+                    verification_token_expires_at = now() + interval '48 hours',
+                    verification_status = 'pendiente',
+                    verified_at = NULL
+                WHERE id = %s
+                """,
+                (nuevo_token, proyecto_id),
+            )
+        conn.commit()
+        return nuevo_token
+    finally:
+        conn.close()
+
+
 def obtener_proyecto(proyecto_id: int) -> dict | None:
+    """
+    `token_vencido` se calcula en SQL (comparando contra el `now()` del
+    servidor de Neon) en vez de en Python, para no arriesgar un desfase
+    entre el reloj del proceso que corre la app y el de la base de datos.
+    """
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -92,7 +131,10 @@ def obtener_proyecto(proyecto_id: int) -> dict | None:
                 """
                 SELECT id, usuario_id, dominio, nombre, stack_detectado,
                        verification_method, verification_token,
-                       verification_status, verified_at, creado_en
+                       verification_status, verified_at, creado_en,
+                       verification_token_expires_at,
+                       (verification_token_expires_at IS NOT NULL
+                        AND verification_token_expires_at < now()) AS token_vencido
                 FROM proyectos WHERE id = %s
                 """,
                 (proyecto_id,),
@@ -108,6 +150,7 @@ def obtener_proyecto(proyecto_id: int) -> dict | None:
         "id", "usuario_id", "dominio", "nombre", "stack_detectado",
         "verification_method", "verification_token",
         "verification_status", "verified_at", "creado_en",
+        "verification_token_expires_at", "token_vencido",
     ]
     return dict(zip(campos, fila))
 

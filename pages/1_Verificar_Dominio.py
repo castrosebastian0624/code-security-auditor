@@ -124,6 +124,20 @@ if usuario_id:
 
                 proyecto_completo = db_pivot.obtener_proyecto(p["id"])
                 token = proyecto_completo["verification_token"]
+                token_vencido = proyecto_completo["token_vencido"]
+
+                if token_vencido:
+                    st.error(
+                        f"⏰ Este token venció el {proyecto_completo['verification_token_expires_at']} "
+                        "(los tokens duran 48h). Genera uno nuevo para poder verificar — "
+                        "el que tenías ya no sirve, aunque lo hayas publicado."
+                    )
+                    if st.button("🔄 Generar nuevo token", key=f"regenerar_{p['id']}"):
+                        db_pivot.regenerar_token(p["id"])
+                        st.rerun()
+                    continue
+
+                st.caption(f"Este token vence el {proyecto_completo['verification_token_expires_at']}.")
 
                 if p["verification_method"] == "dns_txt":
                     st.markdown("**Agrega este registro TXT en tu proveedor de DNS:**")
