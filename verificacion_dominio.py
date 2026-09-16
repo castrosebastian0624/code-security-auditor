@@ -20,18 +20,22 @@ Bolt.new/Replit/Base44) se divide en dos perfiles distintos:
 
 Este módulo NO toca la base de datos — solo hace la verificación en vivo
 (resolución DNS / request HTTP). La persistencia vive en db_pivot.py.
+
+El chequeo por archivo HTTP usa safe_http.py (no `requests` directo) para
+que la resolución DNS y la validación anti-SSRF/rebinding sean una sola
+operación atómica — ver safe_http.py para el detalle de por qué importa.
 ================================================================================
 """
 
 import ipaddress
 import re
 import secrets
-import socket
 from urllib.parse import urlparse
 
 import dns.resolver
 import dns.exception
-import requests
+
+import safe_http
 
 PREFIJO_TXT = "_auditoria-verificacion"
 RUTA_HTTP = "/.well-known/auditoria-verificacion.txt"
@@ -89,39 +93,6 @@ def generar_token() -> str:
     return "auditoria-verify-" + secrets.token_hex(16)
 
 
-def _resolver_ips_publicas(host: str) -> list[str]:
-    """
-    Resuelve el host y devuelve solo IPs públicas. Si CUALQUIER IP resuelta
-    es privada/loopback/link-local/reservada, se rechaza el host completo:
-    es la señal típica de un intento de SSRF (apuntar el "dominio a verificar"
-    a un recurso interno de nuestra propia infraestructura).
-
-    Limitación conocida: esto no protege contra DNS rebinding (que el DNS
-    cambie de IP pública a privada entre esta resolución y el request HTTP
-    real que hace `requests`). Mitigar eso del todo requiere fijar la conexión
-    a la IP ya resuelta — no se implementó en esta fase, queda como pregunta
-    abierta para cuando se conecten los checks activos reales.
-    """
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except socket.gaierror as e:
-        raise DominioInvalidoError(f"No se pudo resolver el dominio '{host}': {e}")
-
-    ips = {info[4][0] for info in infos}
-    if not ips:
-        raise DominioInvalidoError(f"El dominio '{host}' no resolvió a ninguna IP.")
-
-    for ip_str in ips:
-        ip = ipaddress.ip_address(ip_str)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            raise DominioInvalidoError(
-                f"El dominio '{host}' resuelve a una IP no pública ({ip_str}). "
-                "No se puede verificar ni escanear infraestructura interna."
-            )
-
-    return list(ips)
-
-
 def verificar_dns_txt(dominio: str, token_esperado: str) -> tuple[bool, str]:
     """
     Busca el token en un registro TXT de _auditoria-verificacion.<dominio>.
@@ -158,37 +129,24 @@ def verificar_dns_txt(dominio: str, token_esperado: str) -> tuple[bool, str]:
 def verificar_archivo_http(dominio: str, token_esperado: str) -> tuple[bool, str]:
     """
     Busca el token como contenido exacto de https://<dominio>/.well-known/
-    auditoria-verificacion.txt. Antes de pedir el archivo, resuelve el host y
-    rechaza IPs no públicas (protección básica anti-SSRF — ver
-    _resolver_ips_publicas). No sigue redirects (allow_redirects=False): un
-    redirect a otro host podría usarse para desviar la verificación.
+    auditoria-verificacion.txt, usando safe_http.get() — resuelve el DNS una
+    sola vez, valida que la IP sea pública, y conecta directo a esa IP sin
+    volver a resolver (cierra el hueco de DNS rebinding que tenía la versión
+    anterior de este chequeo, que validaba con una resolución y luego dejaba
+    que `requests` resolviera otra vez por su cuenta al conectar).
     """
-    try:
-        _resolver_ips_publicas(dominio)
-    except DominioInvalidoError as e:
-        return False, str(e)
-
     url = f"https://{dominio}{RUTA_HTTP}"
     try:
-        respuesta = requests.get(
-            url,
-            timeout=TIMEOUT_SEGUNDOS,
-            allow_redirects=False,
-            headers={"User-Agent": "AuditorIA-VerificacionDominio/1.0"},
-        )
-    except requests.exceptions.SSLError:
-        return False, f"El sitio no tiene un certificado HTTPS válido en {url}."
-    except requests.exceptions.ConnectionError:
-        return False, f"No se pudo conectar a {url}. ¿El sitio está activo?"
-    except requests.exceptions.Timeout:
-        return False, "Tiempo de espera agotado esperando respuesta del sitio."
-    except requests.exceptions.RequestException as e:
-        return False, f"Error obteniendo el archivo de verificación: {e}"
+        respuesta = safe_http.get(url)
+    except safe_http.SsrfBlockedError as e:
+        return False, str(e)
+    except safe_http.SolicitudSeguraError as e:
+        return False, str(e)
 
     if respuesta.status_code != 200:
         return False, f"El archivo respondió con código {respuesta.status_code} (se esperaba 200)."
 
-    contenido = respuesta.text.strip()
+    contenido = respuesta.texto.strip()
     if contenido == token_esperado:
         return True, f"Token encontrado en {url}."
 
