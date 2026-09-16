@@ -27,6 +27,7 @@ c) Dependencias vulnerables -- en vez de mantener a mano una lista de CVEs
 ================================================================================
 """
 
+import base64
 import json
 import math
 import re
@@ -112,13 +113,16 @@ _PATRON_STRING_LITERAL = re.compile(r"[\"']([A-Za-z0-9+/_=\-.]{24,})[\"']")
 _UMBRAL_ENTROPIA = 4.3
 _MAX_HALLAZGOS_ENTROPIA_POR_ARCHIVO = 5
 # Formato JWT (tres segmentos base64url separados por ".", el primero suele
-# empezar "eyJ") -- excluido a propósito de la heurística de entropía. Un
-# anon key de Supabase o un token de sesión de Firebase SON JWTs, y son
-# altísima entropía por diseño; sin esta exclusión, la heurística los
-# flaggea como "posible secreto" en cada escaneo, exactamente el mismo tipo
-# de falso positivo que ya se excluyó a propósito de PATRONES_SECRETOS.
-# Confirmado en vivo contra un fixture local con un anon key de prueba.
+# empezar "eyJ") -- excluido de la heurística de ENTROPÍA sin importar el
+# rol: un JWT siempre va a tener alta entropía por diseño (es su forma, no
+# una señal de secreto). Pero "es un JWT" no distingue un anon key (público
+# por diseño) de una service_role key (la llave maestra, bypassea RLS por
+# completo) -- esa distinción se resuelve decodificando el payload, no
+# excluyendo o incluyendo el formato entero. Ver _detectar_jwts_sensibles.
 _PATRON_JWT = re.compile(r"^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
+_PATRON_JWT_BUSCAR = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+
+PATRON_SERVICE_ROLE_KEY = "supabase_service_role_key"
 
 
 @dataclass
@@ -126,6 +130,64 @@ class SecretoDetectado:
     archivo: str
     patron: str
     valor_parcial: str
+
+
+def _decodificar_payload_jwt(jwt: str) -> dict | None:
+    """
+    Decodifica el segundo segmento (payload) de un JWT -- base64url, SIN
+    verificar firma. No hace falta ni tenemos la clave para verificarla: solo
+    queremos leer el claim "role" que Supabase pone en claro en el payload,
+    no confiar en el token para autenticar nada. Cualquier fallo de decode
+    (no es JSON, no es un JWT real, longitud rara) devuelve None -- se trata
+    igual que un JWT no reconocible: se ignora, no se reporta con falsa
+    certeza.
+    """
+    partes = jwt.split(".")
+    if len(partes) != 3:
+        return None
+    payload_b64 = partes[1]
+    padding = "=" * (-len(payload_b64) % 4)
+    try:
+        payload_bytes = base64.urlsafe_b64decode(payload_b64 + padding)
+        payload = json.loads(payload_bytes)
+        return payload if isinstance(payload, dict) else None
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def _detectar_jwts_sensibles(contenido: str, archivo_url: str) -> list[SecretoDetectado]:
+    """
+    role == "anon" (o el JWT no decodifica como algo reconocible): se deja
+    pasar, sigue siendo ruido esperado -- Supabase publica el anon key en el
+    frontend a propósito.
+    role != "anon" (service_role, u otro rol elevado que no debería estar
+    en el bundle público): SIEMPRE se reporta -- ver la instrucción explícita
+    en motor_escaneo.SYSTEM_PROMPT_V2 que fuerza CRITICA para este patrón.
+    """
+    hallazgos = []
+    vistos: set[str] = set()
+    for m in _PATRON_JWT_BUSCAR.finditer(contenido):
+        jwt = m.group(0)
+        if jwt in vistos:
+            continue
+        vistos.add(jwt)
+
+        payload = _decodificar_payload_jwt(jwt)
+        if payload is None:
+            continue
+
+        role = payload.get("role")
+        if not role or role == "anon":
+            continue
+
+        hallazgos.append(
+            SecretoDetectado(
+                archivo=archivo_url,
+                patron=PATRON_SERVICE_ROLE_KEY if role == "service_role" else f"jwt_rol_no_anon_{role}",
+                valor_parcial=_enmascarar(jwt),
+            )
+        )
+    return hallazgos
 
 
 def _entropia_shannon(cadena: str) -> float:
@@ -171,6 +233,9 @@ def detectar_secretos_bundle(archivos_js: list[ArchivoJS]) -> list[SecretoDetect
                 hallazgos.append(
                     SecretoDetectado(archivo=archivo.url, patron=nombre_patron, valor_parcial=_enmascarar(m.group(0)))
                 )
+
+        hallazgos.extend(_detectar_jwts_sensibles(archivo.contenido, archivo.url))
+
         for candidato in _candidatos_alta_entropia(archivo.contenido, valores_con_patron_conocido):
             hallazgos.append(
                 SecretoDetectado(archivo=archivo.url, patron="entropia_alta", valor_parcial=_enmascarar(candidato))

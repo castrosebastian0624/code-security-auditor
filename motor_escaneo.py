@@ -65,6 +65,20 @@ ya expone públicamente a cualquier visitante:
    ser un hash, un ID de build, o un asset codificado, no necesariamente un
    secreto real) y refléjalo en la severidad y en el lenguaje del hallazgo.
 
+   REGLA FIJA, NO NEGOCIABLE: si un secreto tiene patrón
+   "supabase_service_role_key" (o cualquier "jwt_rol_no_anon_*"), la
+   severidad de ESE hallazgo SIEMPRE es CRITICA, sin excepción y sin
+   importar qué más haya en el resto del reporte. Ya se decodificó el
+   payload del JWT y se confirmó que su claim "role" NO es "anon" -- es la
+   llave maestra de Supabase (o un rol elevado equivalente), da acceso
+   total a la base de datos y bypasea RLS por completo. NO la confundas con
+   el anon key (que es público por diseño y nunca debería aparecer como
+   hallazgo -- si no ves este patrón específico en la evidencia, no hay
+   nada que reportar sobre las credenciales de Supabase en sí). Redacta el
+   título y la descripción nombrando explícitamente "service_role key" y
+   el impacto (acceso total, bypass de RLS), no lo trates como un secreto
+   genérico más.
+
 3. DEPENDENCIAS VULNERABLES: librerías JavaScript de terceros detectadas en
    el bundle cuya versión tiene CVEs públicos conocidos (vía la base de
    datos de Retire.js). Evalúa el impacto real del CVE descrito, no asumas
@@ -221,6 +235,59 @@ Recuerda: responde ÚNICAMENTE con el objeto JSON especificado en tus instruccio
     return _extraer_json(respuesta.choices[0].message.content)
 
 
+def _forzar_severidad_service_role(reporte: dict, secretos: list[checks_pasivos.SecretoDetectado]) -> None:
+    """
+    Defensa en profundidad para el hallazgo más crítico que estos 3 checks
+    pueden producir: una service_role key de Supabase expuesta. El prompt ya
+    instruye al LLM a marcarlo CRITICA sin excepción (ver SYSTEM_PROMPT_V2),
+    pero no confiamos SOLO en que el LLM siga la instrucción -- incorrecto
+    dado el impacto (bypass total de RLS). Muta `reporte["vulnerabilidades"]`
+    in-place: sube a CRITICA cualquier tarjeta que ya mencione el hallazgo, y
+    si el LLM lo omitió por completo, inyecta una tarjeta propia en vez de
+    dejar que el hallazgo más grave del escaneo desaparezca en silencio.
+    """
+    hay_service_role = any(s.patron == checks_pasivos.PATRON_SERVICE_ROLE_KEY for s in secretos)
+    if not hay_service_role:
+        return
+
+    vulnerabilidades = reporte.setdefault("vulnerabilidades", [])
+    ya_cubierto = False
+    for vuln in vulnerabilidades:
+        texto = f"{vuln.get('titulo', '')} {vuln.get('descripcion', '')}".lower()
+        if "service_role" in texto or "service role" in texto:
+            vuln["severidad"] = "CRITICA"
+            ya_cubierto = True
+
+    if not ya_cubierto:
+        archivo = next(s.archivo for s in secretos if s.patron == checks_pasivos.PATRON_SERVICE_ROLE_KEY)
+        vulnerabilidades.append(
+            {
+                "titulo": "Clave service_role de Supabase expuesta en el bundle",
+                "severidad": "CRITICA",
+                "categoria_owasp_o_cwe": "CWE-798 Uso de credenciales hardcodeadas",
+                "ubicacion": archivo,
+                "descripcion": (
+                    "Se encontró una clave service_role de Supabase (la llave maestra del "
+                    "proyecto, distinta del anon key público) hardcodeada en el bundle JS "
+                    "servido al navegador de cualquier visitante."
+                ),
+                "impacto_potencial": (
+                    "Cualquier visitante puede extraer esta clave del bundle y usarla para "
+                    "leer y escribir en toda la base de datos sin pasar por Row Level Security "
+                    "(RLS) -- control total, equivalente a acceso de administrador."
+                ),
+                "sugerencia_tecnica": (
+                    "Elimina esta clave del código del frontend de inmediato y rótala desde el "
+                    "dashboard de Supabase (Settings > API). La service_role key SOLO debe "
+                    "usarse en código de servidor (backend, edge functions) -- nunca en nada "
+                    "que se envíe al navegador."
+                ),
+            }
+        )
+    reporte["total_vulnerabilidades"] = len(vulnerabilidades)
+    reporte["estado_general"] = "CRITICO"
+
+
 def ejecutar_escaneo(proyecto_id: int, disparado_por: str = "manual") -> int:
     """
     Punto de entrada único de Fase 2. Requiere que el proyecto ya esté
@@ -247,6 +314,7 @@ def ejecutar_escaneo(proyecto_id: int, disparado_por: str = "manual") -> int:
 
         evidencia = _construir_evidencia(url, fp, headers, secretos, dependencias)
         reporte = _llamar_llm(evidencia)
+        _forzar_severidad_service_role(reporte, secretos)
 
         for vuln in reporte.get("vulnerabilidades", []):
             tipo_check = _inferir_tipo_check(vuln, fp)
@@ -285,7 +353,8 @@ def _evidencia_para_hallazgo(
     """
     ubicacion = (vuln.get("ubicacion") or "").lower()
     titulo = (vuln.get("titulo") or "").lower()
-    texto = f"{titulo} {ubicacion}"
+    descripcion = (vuln.get("descripcion") or "").lower()
+    texto = f"{titulo} {ubicacion} {descripcion}"
 
     if tipo_check == "headers":
         for nombre_header in checks_pasivos.HEADERS_ESPERADOS:
@@ -297,10 +366,22 @@ def _evidencia_para_hallazgo(
             return {"nota": f"Headers faltantes: {', '.join(headers.headers_faltantes)}"}
 
     elif tipo_check == "secretos_bundle":
+        # Prioridad al hallazgo más grave posible: si el texto nombra
+        # "service_role" y de verdad hay uno detectado, atarlo primero --
+        # no dejar que el orden de iteración o un match parcial de otro
+        # patrón le robe la evidencia correcta al hallazgo más crítico.
+        if "service_role" in texto or "service role" in texto:
+            for s in secretos:
+                if s.patron == checks_pasivos.PATRON_SERVICE_ROLE_KEY:
+                    return {"archivo": s.archivo, "patron_detectado": s.patron, "valor_parcial": s.valor_parcial}
         for s in secretos:
             if s.patron in texto or s.archivo.lower() in texto:
                 return {"archivo": s.archivo, "patron_detectado": s.patron, "valor_parcial": s.valor_parcial}
-        if secretos:
+        if len(secretos) == 1:
+            # Solo nos arriesgamos a la evidencia "por defecto" cuando no
+            # hay ambigüedad posible -- con 2+ secretos distintos en el
+            # mismo archivo, adivinar cuál es cuál sería peor que no
+            # adjuntar nada (evidencia_metadata quedaría mal atribuida).
             s = secretos[0]
             return {"archivo": s.archivo, "patron_detectado": s.patron, "valor_parcial": s.valor_parcial}
 
