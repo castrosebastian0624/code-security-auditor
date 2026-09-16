@@ -33,15 +33,26 @@ apps con Lovable, Bolt.new, Replit o Base44 sobre Supabase o Firebase — gente
 que despliega sin tener a nadie revisando seguridad detrás.
 
 En vez de un archivo, la entrada es la URL de una app en producción. Los
-primeros checks del MVP nuevo:
+checks del MVP nuevo:
 
-1. **RLS mal configurado en Supabase** — extraer la anon key del bundle de JS
+**Fase 2 (implementada, solo checks pasivos — ver `motor_escaneo.py`):**
+1. **Cabeceras de seguridad faltantes** (CSP, HSTS, X-Frame-Options, CORS mal
+   configurado) — `checks_pasivos.py`, vía `safe_http.py`.
+2. **Secretos/API keys expuestas** en el bundle de JS servido al navegador —
+   patrones conocidos por proveedor + heurística de entropía.
+3. **Dependencias con vulnerabilidades conocidas** — matcher propio contra la
+   base de datos de Retire.js (vendored en `data/retire_js_repository.json`).
+
+**Fase 3 (pendiente, necesitan su propio diseño de "conteo, no contenido"
+porque sí tocan datos que podrían ser de terceros):**
+4. **RLS mal configurado en Supabase** — extraer la anon key del bundle de JS
    público y probar qué tablas quedan expuestas sin restricción.
-2. **Secretos/API keys expuestas** en el bundle de JS servido al navegador.
-3. **Endpoints sin autenticación / IDOR** — enumeración de IDs.
-4. **Cabeceras de seguridad faltantes** (CSP, HSTS, X-Frame-Options, CORS mal
-   configurado).
-5. **Dependencias con vulnerabilidades conocidas.**
+5. **Endpoints sin autenticación / IDOR** — enumeración de IDs.
+
+El renderizado usa Playwright (headless Chromium) porque una SPA de
+Lovable/Bolt/Base44 no se ve completa con un request HTTP plano — ver
+`ingesta.py`. El fingerprinting de stack (Supabase vs. Firebase, sobre el
+bundle ya extraído) vive en `fingerprinting.py`.
 
 El motor de LLM migra a **GLM-5.3** (mismo precio que GLM-5.2, mejor en
 benchmarks de ciberseguridad). Modelo de negocio: freemium con dos tiers
@@ -70,7 +81,22 @@ un proyecto de Neon Postgres.
 python -m venv venv
 source venv/bin/activate        # En Windows: venv\Scripts\activate
 pip install -r requirements.txt
+python -m playwright install chromium
 ```
+
+El último paso descarga el binario de Chromium que usa `ingesta.py` (no
+viene con `pip install`). **Fricción real encontrada**: el downloader de
+Playwright puede fallar con timeout en algunas redes aunque la conectividad
+esté bien (confirmado: `curl` a la misma URL funcionaba mientras el
+downloader de Playwright fallaba repetidamente). Si `playwright install`
+falla varias veces seguidas, se puede instalar a mano: descargar el zip de
+`https://cdn.playwright.dev/builds/cft/<version>/win64/chrome-win64.zip` (y
+el `chrome-headless-shell-win64.zip` equivalente — Playwright usa ESE por
+default en `launch()`, no el Chrome completo) con `curl -L`, extraerlos en
+`%LOCALAPPDATA%\ms-playwright\chromium-<build>\` y
+`chromium_headless_shell-<build>\` respectivamente, y crear un archivo vacío
+`INSTALLATION_COMPLETE` en cada carpeta. La versión/build exacta que espera
+tu instalación de Playwright sale de `python -m playwright install --dry-run chromium`.
 
 Crea un archivo `.env` en la raíz del proyecto (nunca lo comitees — ya está
 en `.gitignore`) con:
@@ -88,6 +114,16 @@ Para el login con Clerk, copia `.streamlit/secrets.toml.example` a
 Clerk muestra al crear una OAuth application (Config > OAuth applications en
 su dashboard) — ver comentarios en el archivo de ejemplo para el detalle.
 
+**Redirect URIs registrados en la OAuth application de Clerk** (Config >
+OAuth applications > la app > Redirect URIs): hoy tiene dos —
+`http://localhost:8501/oauth2callback` (local) y
+`https://auditor-ia.onrender.com/oauth2callback` (placeholder de producción,
+registrado por adelantado para no bloquear el primer deploy real). **Cuando
+se defina el nombre real del servicio en Render, hay que actualizar los DOS
+lados**: el redirect URI en el dashboard de Clerk, y `redirect_uri` en el
+`secrets.toml` de producción — si no coinciden exactamente, Clerk rechaza el
+login con `invalid_request`.
+
 Aplica las migraciones SQL en orden contra tu base de Neon (ver
 `migrations/README.md` para el detalle de cada una):
 
@@ -96,6 +132,7 @@ psql "$DATABASE_URL" -f migrations/001_codigos_acceso.sql
 psql "$DATABASE_URL" -f migrations/002_pivot_schema.sql
 psql "$DATABASE_URL" -f migrations/003_expiracion_token.sql
 psql "$DATABASE_URL" -f migrations/004_clerk_identity.sql
+psql "$DATABASE_URL" -f migrations/005_evidencia_checks_pasivos.sql
 ```
 
 Corre la app:
@@ -118,6 +155,11 @@ verificacion_dominio.py         Verificación de propiedad de dominio (DNS TXT /
 safe_http.py                    Cliente HTTP compartido: resuelve DNS una vez, bloquea SSRF, fija la IP (cierra DNS rebinding)
 auth.py                         Login con Clerk (OIDC vía st.login() nativo de Streamlit)
 db_pivot.py                     Acceso a las tablas nuevas del pivote (usuarios/proyectos/escaneos/hallazgos)
+ingesta.py                      Renderizado con Playwright + extracción del bundle JS (Fase 2)
+fingerprinting.py               Detección de Supabase/Firebase sobre el bundle ya extraído (Fase 2)
+checks_pasivos.py               3 checks pasivos: headers, secretos en el bundle, dependencias vulnerables (Fase 2)
+motor_escaneo.py                Orquesta ingesta + fingerprinting + checks + LLM -> hallazgos (Fase 2)
+data/retire_js_repository.json  Snapshot vendored de la base de vulnerabilidades de Retire.js (Apache-2.0)
 pages/                          Páginas adicionales de la app multipágina de Streamlit
 generar_codigo.py               Script interno (NO se despliega) para generar códigos de acceso
 migrations/                     Migraciones SQL, en orden, con su propio README
@@ -127,7 +169,12 @@ migrations/                     Migraciones SQL, en orden, con su propio README
 
 ## Estado del proyecto
 
-MVP en validación de mercado 1-a-1 (ventas manuales por código de acceso).
-`app.py` es un monolito intencional: la prioridad hoy es velocidad de
-iteración, no arquitectura perfecta. Cuando el pivote a escaneo por URL
-tenga checks reales (Fase 2 en adelante), este archivo se divide en módulos.
+MVP en validación de mercado 1-a-1 (ventas manuales por código de acceso)
+para v1. El pivote a escaneo por URL (v2) tiene la fundación (Fase 1: auth,
+verificación de dominio, cliente HTTP seguro) y los 3 checks pasivos (Fase
+2: headers, secretos en el bundle, dependencias vulnerables) implementados y
+probados en vivo. RLS de Supabase e IDOR (Fase 3) siguen pendientes.
+`app.py` sigue siendo un monolito intencional del flujo v1 — el pivote vive
+en módulos separados desde el principio (`db_pivot.py`, `auth.py`,
+`safe_http.py`, `ingesta.py`, `fingerprinting.py`, `checks_pasivos.py`,
+`motor_escaneo.py`), no se acumula ahí.
