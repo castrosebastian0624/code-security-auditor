@@ -49,4 +49,11 @@ COPY . .
 # de abajo solo aplica corriendo el contenedor localmente sin definir PORT.
 EXPOSE 8501
 
-CMD streamlit run app.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true
+# `exec` (no solo forma shell) es a propósito: sin él, /bin/sh queda como
+# PID 1 y streamlit corre como un proceso hijo, así que un SIGTERM de Render
+# (al redeployar o escalar) no le llega directo al proceso de streamlit --
+# `exec` reemplaza el shell por streamlit en el mismo PID, para que sí
+# reciba la señal y pueda cerrar limpio. La forma exec/JSON de CMD no sirve
+# acá porque no expande ${PORT}, así que esto es lo más cercano a "las dos
+# cosas" que Docker permite en una sola línea.
+CMD exec streamlit run app.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true
