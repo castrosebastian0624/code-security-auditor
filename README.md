@@ -43,11 +43,32 @@ checks del MVP nuevo:
 3. **Dependencias con vulnerabilidades conocidas** — matcher propio contra la
    base de datos de Retire.js (vendored en `data/retire_js_repository.json`).
 
-**Fase 3 (pendiente, necesitan su propio diseño de "conteo, no contenido"
-porque sí tocan datos que podrían ser de terceros):**
-4. **RLS mal configurado en Supabase** — extraer la anon key del bundle de JS
-   público y probar qué tablas quedan expuestas sin restricción.
-5. **Endpoints sin autenticación / IDOR** — enumeración de IDs.
+**Fase 3 Parte A (implementada — escaneo ACTIVO de lectura, con consentimiento
+explícito y separado del de verificación de dominio; ver `checks_activos.py` /
+`motor_escaneo_activo.py`):**
+4. **RLS mal configurado en Supabase** — descubre tablas vía el schema OpenAPI
+   de PostgREST, prueba conteo con la anon key (nunca contenido real).
+5. **Storage buckets expuestos** (Supabase y Firebase) — lista buckets/objetos
+   sin autenticación; guarda conteo y nombres de archivo, nunca contenido.
+6. **Equivalentes de Firebase** — Firestore y Realtime Database (lectura sin
+   auth, mismo patrón de conteo/existencia), sobre nombres de colección/ruta
+   extraídos del propio bundle (no una wordlist adivinando nombres).
+7. **Detección estática de RPC/Edge Functions** — solo se detecta el nombre en
+   el bundle, nunca se invoca (severidad MEDIA, "requiere verificación manual").
+
+Un `CircuitBreaker` (`circuit_breaker.py`) protege estos checks: límite duro de
+requests, espera entre cada uno, y aborto automático si la latencia o la tasa
+de error del objetivo se vuelve anómala — el escaneo se detiene solo y queda
+marcado `abortado`, no sigue insistiendo contra un objetivo degradado.
+
+**Pendiente, con documento de diseño ya escrito pero sin implementar
+(`docs/DISENO_FASE3_ESCRITURA_RPC.md`) — se revisa antes de construirse:**
+8. Prueba de escritura de RLS (INSERT+DELETE reversible, nunca UPDATE de datos
+   ajenos).
+9. Invocación real de RPC/Edge Functions detectadas (o, la alternativa que se
+   recomienda en el documento: generar instrucciones para que el propio dueño
+   las pruebe a mano, en vez de automatizar la invocación).
+10. **Endpoints sin autenticación / IDOR** — enumeración de IDs.
 
 El renderizado usa Playwright (headless Chromium) porque una SPA de
 Lovable/Bolt/Base44 no se ve completa con un request HTTP plano — ver
@@ -133,6 +154,7 @@ psql "$DATABASE_URL" -f migrations/002_pivot_schema.sql
 psql "$DATABASE_URL" -f migrations/003_expiracion_token.sql
 psql "$DATABASE_URL" -f migrations/004_clerk_identity.sql
 psql "$DATABASE_URL" -f migrations/005_evidencia_checks_pasivos.sql
+psql "$DATABASE_URL" -f migrations/006_fase3_lectura_activa.sql
 ```
 
 Corre la app:
@@ -159,7 +181,12 @@ ingesta.py                      Renderizado con Playwright + extracción del bun
 proxy_saliente.py               Proxy de reenvío local: único canal de salida de Playwright, cierra SSRF en subrecursos cross-origin (Fase 2)
 fingerprinting.py               Detección de Supabase/Firebase sobre el bundle ya extraído (Fase 2)
 checks_pasivos.py               3 checks pasivos: headers, secretos en el bundle, dependencias vulnerables (Fase 2)
-motor_escaneo.py                Orquesta ingesta + fingerprinting + checks + LLM -> hallazgos (Fase 2)
+jwt_utils.py                    Decodificar payload de JWT sin verificar firma (compartido por checks_pasivos.py y fingerprinting.py)
+motor_escaneo.py                Orquesta ingesta + fingerprinting + checks pasivos + LLM -> hallazgos (Fase 2)
+circuit_breaker.py              Límite de requests + detección de latencia/tasa de error anómala (Fase 3)
+checks_activos.py               RLS de Supabase, Storage buckets, Firebase, detección estática de RPC (Fase 3 Parte A)
+motor_escaneo_activo.py         Orquesta el escaneo activo con consentimiento + circuit breaker -> hallazgos (Fase 3 Parte A)
+docs/DISENO_FASE3_ESCRITURA_RPC.md  Diseño (NO implementado) de prueba de escritura RLS e invocación de RPC
 data/retire_js_repository.json  Snapshot vendored de la base de vulnerabilidades de Retire.js (Apache-2.0)
 pages/                          Páginas adicionales de la app multipágina de Streamlit
 generar_codigo.py               Script interno (NO se despliega) para generar códigos de acceso
@@ -172,10 +199,15 @@ migrations/                     Migraciones SQL, en orden, con su propio README
 
 MVP en validación de mercado 1-a-1 (ventas manuales por código de acceso)
 para v1. El pivote a escaneo por URL (v2) tiene la fundación (Fase 1: auth,
-verificación de dominio, cliente HTTP seguro) y los 3 checks pasivos (Fase
-2: headers, secretos en el bundle, dependencias vulnerables) implementados y
-probados en vivo. RLS de Supabase e IDOR (Fase 3) siguen pendientes.
+verificación de dominio, cliente HTTP seguro), los 3 checks pasivos (Fase 2)
+y el escaneo activo de lectura con consentimiento (Fase 3 Parte A: RLS de
+Supabase, Storage, Firebase, detección de RPC) implementados y probados en
+vivo -- Supabase contra un fixture propio en Render, Firebase contra un
+proyecto real desechable. IDOR y las partes de escritura/invocación de Fase
+3 (documento de diseño ya escrito, ver `docs/DISENO_FASE3_ESCRITURA_RPC.md`)
+siguen pendientes de implementar.
 `app.py` sigue siendo un monolito intencional del flujo v1 — el pivote vive
 en módulos separados desde el principio (`db_pivot.py`, `auth.py`,
-`safe_http.py`, `ingesta.py`, `fingerprinting.py`, `checks_pasivos.py`,
-`motor_escaneo.py`), no se acumula ahí.
+`safe_http.py`, `ingesta.py`, `proxy_saliente.py`, `fingerprinting.py`,
+`checks_pasivos.py`, `motor_escaneo.py`, `circuit_breaker.py`,
+`checks_activos.py`, `motor_escaneo_activo.py`), no se acumula ahí.
