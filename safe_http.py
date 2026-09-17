@@ -28,14 +28,21 @@ El hostname real se sigue usando para SNI y para la validación del
 certificado TLS (si no, romperíamos cualquier sitio detrás de un balanceador
 o CDN que dependa de SNI para saber qué certificado servir).
 
-Este módulo es deliberadamente mínimo (solo GET, sin seguir redirects,
+Este módulo es deliberadamente mínimo (GET/HEAD/POST, sin seguir redirects,
 sin sesiones/cookies) porque cada capacidad nueva que se le agregue tiene
 que pasar por el mismo análisis de seguridad. Ampliarlo con cuidado.
+
+HEAD y POST (agregados en Fase 3, para PostgREST y Supabase Storage) pasan
+por el MISMO `_solicitud()` interno que GET -- misma resolución de IP,
+mismo pineo de conexión, mismo manejo de errores. No son una reimplementación
+paralela, son la misma lógica de conexión segura con el método/cuerpo como
+parámetro.
 ================================================================================
 """
 
 import http.client
 import ipaddress
+import json as json_lib
 import socket
 import ssl
 from dataclasses import dataclass
@@ -126,27 +133,27 @@ def resolver_ip_publica_unica(host: str) -> str:
     return ips_vistas[0]
 
 
-def get(
+def _solicitud(
+    metodo: str,
     url: str,
-    timeout: float = TIMEOUT_DEFAULT_SEGUNDOS,
-    headers: dict | None = None,
+    timeout: float,
+    headers: dict | None,
+    cuerpo: bytes | None,
 ) -> RespuestaSegura:
     """
-    GET seguro contra SSRF y DNS rebinding.
+    Núcleo compartido de GET/HEAD/POST. Deliberadamente NO sigue redirects:
+    seguir un 3xx significa repetir TODO este proceso de validación contra
+    el nuevo host del `Location`, porque ese host podría ser interno. Quien
+    llama decide si le interesa seguir el redirect (puede leer
+    `respuesta.headers.get("Location")` y volver a llamar explícitamente).
 
-    Deliberadamente NO sigue redirects: seguir un 3xx significa repetir
-    TODO este proceso de validación contra el nuevo host del `Location`,
-    porque ese host podría ser interno. Quien llama decide si le interesa
-    seguir el redirect (puede leer `respuesta.headers.get("Location")` y
-    llamar a `get()` de nuevo explícitamente).
-
-    Solo soporta HTTPS a propósito: si algún check de Fase 2 necesita HTTP
-    plano alguna vez, que sea una decisión explícita y documentada en ese
-    momento, no un default silencioso.
+    Solo soporta HTTPS a propósito: si algún check necesita HTTP plano
+    alguna vez, que sea una decisión explícita y documentada en ese momento,
+    no un default silencioso.
     """
     partes = urlsplit(url)
     if partes.scheme != "https":
-        raise SolicitudSeguraError("safe_http.get() solo soporta https:// por diseño.")
+        raise SolicitudSeguraError(f"safe_http.{metodo.lower()}() solo soporta https:// por diseño.")
 
     host = partes.hostname
     if not host:
@@ -166,15 +173,17 @@ def get(
         cabeceras = {"Host": host, "User-Agent": USER_AGENT_DEFAULT}
         if headers:
             cabeceras.update(headers)
+        if cuerpo is not None:
+            cabeceras.setdefault("Content-Length", str(len(cuerpo)))
 
-        conexion.request("GET", ruta, headers=cabeceras)
+        conexion.request(metodo, ruta, body=cuerpo, headers=cabeceras)
         respuesta = conexion.getresponse()
-        cuerpo = respuesta.read().decode("utf-8", errors="ignore")
+        cuerpo_respuesta = respuesta.read().decode("utf-8", errors="ignore")
 
         return RespuestaSegura(
             status_code=respuesta.status,
             headers=dict(respuesta.getheaders()),
-            texto=cuerpo,
+            texto=cuerpo_respuesta,
             ip_usada=ip,
             host=host,
         )
@@ -186,3 +195,36 @@ def get(
         raise SolicitudSeguraError(f"Error de conexión a {host} ({ip}): {e}")
     finally:
         conexion.close()
+
+
+def get(url: str, timeout: float = TIMEOUT_DEFAULT_SEGUNDOS, headers: dict | None = None) -> RespuestaSegura:
+    """GET seguro contra SSRF y DNS rebinding."""
+    return _solicitud("GET", url, timeout, headers, cuerpo=None)
+
+
+def head(url: str, timeout: float = TIMEOUT_DEFAULT_SEGUNDOS, headers: dict | None = None) -> RespuestaSegura:
+    """
+    HEAD seguro. Igual que get() pero sin cuerpo de respuesta -- se usa para
+    el chequeo de RLS de PostgREST (Prefer: count=exact devuelve el conteo
+    total en el header Content-Range incluso en un HEAD, sin necesidad de
+    traer ninguna fila real).
+    """
+    return _solicitud("HEAD", url, timeout, headers, cuerpo=None)
+
+
+def post(
+    url: str,
+    json: dict | None = None,
+    timeout: float = TIMEOUT_DEFAULT_SEGUNDOS,
+    headers: dict | None = None,
+) -> RespuestaSegura:
+    """
+    POST seguro con cuerpo JSON opcional -- se usa para listar objetos de un
+    bucket de Supabase Storage (esa API específica es POST, no GET).
+    """
+    cabeceras = dict(headers) if headers else {}
+    cuerpo = None
+    if json is not None:
+        cuerpo = json_lib.dumps(json).encode("utf-8")
+        cabeceras.setdefault("Content-Type", "application/json")
+    return _solicitud("POST", url, timeout, cabeceras, cuerpo=cuerpo)

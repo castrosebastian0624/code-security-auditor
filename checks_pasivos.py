@@ -27,7 +27,6 @@ c) Dependencias vulnerables -- en vez de mantener a mano una lista de CVEs
 ================================================================================
 """
 
-import base64
 import json
 import math
 import re
@@ -37,6 +36,7 @@ from pathlib import Path
 
 from packaging.version import InvalidVersion, Version
 
+import jwt_utils
 import safe_http
 from ingesta import ArchivoJS
 
@@ -132,29 +132,6 @@ class SecretoDetectado:
     valor_parcial: str
 
 
-def _decodificar_payload_jwt(jwt: str) -> dict | None:
-    """
-    Decodifica el segundo segmento (payload) de un JWT -- base64url, SIN
-    verificar firma. No hace falta ni tenemos la clave para verificarla: solo
-    queremos leer el claim "role" que Supabase pone en claro en el payload,
-    no confiar en el token para autenticar nada. Cualquier fallo de decode
-    (no es JSON, no es un JWT real, longitud rara) devuelve None -- se trata
-    igual que un JWT no reconocible: se ignora, no se reporta con falsa
-    certeza.
-    """
-    partes = jwt.split(".")
-    if len(partes) != 3:
-        return None
-    payload_b64 = partes[1]
-    padding = "=" * (-len(payload_b64) % 4)
-    try:
-        payload_bytes = base64.urlsafe_b64decode(payload_b64 + padding)
-        payload = json.loads(payload_bytes)
-        return payload if isinstance(payload, dict) else None
-    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-
-
 def _detectar_jwts_sensibles(contenido: str, archivo_url: str) -> list[SecretoDetectado]:
     """
     role == "anon" (o el JWT no decodifica como algo reconocible): se deja
@@ -172,7 +149,7 @@ def _detectar_jwts_sensibles(contenido: str, archivo_url: str) -> list[SecretoDe
             continue
         vistos.add(jwt)
 
-        payload = _decodificar_payload_jwt(jwt)
+        payload = jwt_utils.decodificar_payload(jwt)
         if payload is None:
             continue
 
