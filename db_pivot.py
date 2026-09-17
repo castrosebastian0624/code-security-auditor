@@ -155,6 +155,67 @@ def obtener_proyecto(proyecto_id: int) -> dict | None:
     return dict(zip(campos, fila))
 
 
+# ==============================================================================
+# consentimientos_escaneo -- Fase 3, POR CATEGORÍA (migrations/007)
+# ==============================================================================
+# Un booleano único habría hecho que aceptar la categoría de HOY (lectura
+# activa) cubriera automáticamente cualquier categoría nueva que se agregue
+# después (Fase 3 Parte B: escritura de RLS, invocación de RPC/Edge
+# Functions -- ver docs/DISENO_FASE3_ESCRITURA_RPC.md) sin que el usuario la
+# haya autorizado explícitamente. Cada categoría es su propia fila.
+
+CATEGORIA_LECTURA_ACTIVA = "lectura_activa"
+
+
+def tiene_consentimiento(proyecto_id: int, categoria: str) -> bool:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM consentimientos_escaneo WHERE proyecto_id = %s AND categoria = %s",
+                (proyecto_id, categoria),
+            )
+            return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def otorgar_consentimiento(proyecto_id: int, categoria: str) -> None:
+    """
+    Idempotente a propósito (ON CONFLICT DO NOTHING): otorgar de nuevo un
+    consentimiento ya existente no debe fallar ni pisar `otorgado_en`
+    original -- la fecha real de la primera autorización es la que importa.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO consentimientos_escaneo (proyecto_id, categoria)
+                VALUES (%s, %s)
+                ON CONFLICT (proyecto_id, categoria) DO NOTHING
+                """,
+                (proyecto_id, categoria),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def listar_consentimientos(proyecto_id: int) -> list[dict]:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT categoria, otorgado_en FROM consentimientos_escaneo WHERE proyecto_id = %s ORDER BY otorgado_en",
+                (proyecto_id,),
+            )
+            filas = cur.fetchall()
+    finally:
+        conn.close()
+    return [{"categoria": f[0], "otorgado_en": f[1]} for f in filas]
+
+
 def listar_proyectos(usuario_id: int) -> list[dict]:
     conn = get_connection()
     try:
@@ -281,6 +342,25 @@ def marcar_escaneo_fallido(escaneo_id: int) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE escaneos SET estado = 'fallido', finalizado_en = now() WHERE id = %s",
+                (escaneo_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def marcar_escaneo_abortado(escaneo_id: int) -> None:
+    """
+    Distinto de 'fallido': 'fallido' es un error nuestro (excepción,
+    timeout). 'abortado' es el circuit breaker frenando el escaneo a
+    propósito porque el objetivo mostró latencia/tasa de error anómala --
+    ver circuit_breaker.py y motor_escaneo_activo.py.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE escaneos SET estado = 'abortado', finalizado_en = now() WHERE id = %s",
                 (escaneo_id,),
             )
         conn.commit()

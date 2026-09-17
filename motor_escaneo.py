@@ -90,8 +90,46 @@ También recibes el `stack_detectado` (Supabase, Firebase, o desconocido) --
 es solo contexto para tu redacción (ej. mencionar que las credenciales de
 Supabase visibles en el bundle son normales por diseño y NO son en sí mismas
 el hallazgo, a menos que el check de secretos haya encontrado algo más
-específico). NO evalúes RLS ni permisos de base de datos -- no tienes esa
-evidencia todavía, eso es de una fase posterior.
+específico).
+
+Si el proyecto autorizó un ESCANEO ACTIVO (Fase 3 -- consentimiento
+explícito y separado, ver proyectos.consentimiento_escaneo_activo), la
+evidencia puede incluir ADEMÁS estos 4 tipos, siempre agregada (conteos y
+nombres, nunca contenido real de filas/documentos/archivos):
+
+4. RLS DE SUPABASE EXPUESTO: tablas donde un HEAD anónimo con
+   Prefer: count=exact devolvió un conteo de filas MAYOR A CERO -- eso
+   significa que Row Level Security está desactivado o mal configurado para
+   esa tabla, y cualquier visitante sin cuenta puede leer (y probablemente
+   contar/enumerar) filas reales. Severidad casi siempre CRITICA o ALTA
+   según lo que sugiera el nombre de la tabla (ej. "usuarios", "pagos",
+   "mensajes" son más graves que una tabla de catálogo público).
+
+5. STORAGE BUCKETS EXPUESTOS (Supabase o Firebase): buckets donde se pudo
+   listar archivos sin autenticación -- recibes el conteo y los NOMBRES de
+   archivo (nunca su contenido). Evalúa la severidad según qué sugieren los
+   nombres (ej. nombres que parecen documentos de identidad, contratos,
+   backups de base de datos son más graves que assets de UI genéricos).
+
+6. FIREBASE -- EQUIVALENTES DE LECTURA: colecciones de Firestore o rutas de
+   Realtime Database donde una lectura anónima devolvió datos (conteo de
+   documentos o de claves hijas, nunca su contenido), o un bucket de
+   Firebase Storage listable sin auth. Mismo tratamiento que RLS de
+   Supabase -- es el mismo tipo de problema (falta de reglas de seguridad
+   del lado del servidor), solo que en la terminología de Firebase.
+
+7. FUNCIONES INVOCABLES DETECTADAS (RPC de Supabase / Callable Functions de
+   Firebase): SOLO se detectaron por análisis estático del nombre en el
+   bundle -- NO se invocaron, no sabemos si están protegidas o no. Severidad
+   SIEMPRE MEDIA para este tipo, nunca CRITICA/ALTA -- el título debe dejar
+   claro que es un hallazgo de "requiere verificación manual", no una
+   vulnerabilidad confirmada (ej. "Función RPC 'transferir_dinero' detectada
+   -- verificar manualmente si requiere autenticación").
+
+Si NO recibes evidencia de estos 4 tipos (el proyecto no tiene consentimiento
+de escaneo activo, o el stack no es Supabase/Firebase), simplemente no
+generes hallazgos de esas categorías -- no asumas ni inventes nada sobre
+RLS/Storage/Firebase que no esté en la evidencia que se te dio.
 
 ===============================================================================
 REGLAS DE CONSOLIDACIÓN Y PRIORIZACIÓN (igual de válidas aquí que en la
@@ -108,7 +146,12 @@ ruido, no ayuda)
 3. Si hay varias dependencias vulnerables, una tarjeta por librería está
    bien (cada una tiene su propio CVE/impacto), pero no repitas la misma
    librería+versión en más de una tarjeta.
-4. El objetivo: el número de tarjetas debe reflejar problemas DISTINTOS por
+4. Si hay 3 o más tablas de Supabase con RLS expuesto (o 3+ funciones RPC
+   detectadas), considera UNA tarjeta consolidada listando todas -- a menos
+   que una tabla en particular sea claramente más grave que las demás (ej.
+   una tabla de pagos entre varias de catálogo), en cuyo caso esa merece su
+   propia tarjeta separada y el resto se consolida.
+5. El objetivo: el número de tarjetas debe reflejar problemas DISTINTOS por
    su naturaleza técnica, no el conteo bruto de cada coincidencia individual.
 
 ===============================================================================
@@ -202,7 +245,14 @@ def _construir_evidencia(
     }
 
 
-def _llamar_llm(evidencia: dict) -> dict:
+def llamar_llm(evidencia: dict) -> dict:
+    """
+    Pública (sin guion bajo) a propósito -- motor_escaneo_activo.py (Fase 3)
+    la reusa tal cual para su propia evidencia (RLS/Storage/Firebase/RPC),
+    en vez de duplicar la llamada al LLM. No le importa la forma interna de
+    `evidencia`, solo la serializa -- el prompt (SYSTEM_PROMPT_V2) es el que
+    sabe interpretar cada categoría que pueda venir.
+    """
     if not OPENROUTER_API_KEY:
         raise EscaneoError("Falta OPENROUTER_API_KEY en el entorno -- no se puede generar el reporte.")
 
@@ -313,7 +363,7 @@ def ejecutar_escaneo(proyecto_id: int, disparado_por: str = "manual") -> int:
         dependencias = checks_pasivos.detectar_dependencias_vulnerables(resultado_ingesta.archivos_js)
 
         evidencia = _construir_evidencia(url, fp, headers, secretos, dependencias)
-        reporte = _llamar_llm(evidencia)
+        reporte = llamar_llm(evidencia)
         _forzar_severidad_service_role(reporte, secretos)
 
         for vuln in reporte.get("vulnerabilidades", []):
